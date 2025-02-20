@@ -8,9 +8,12 @@ import {
   signInWithCredential,
   User,
   AuthError,
-  initializeAuth
+  initializeAuth,
+  Auth
 } from 'firebase/auth';
+import { getReactNativePersistence } from 'firebase/auth/react-native';
 import { FirebaseApp } from 'firebase/app';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import { maybeCompleteAuthSession } from 'expo-web-browser';
 import firebaseApp from './firebaseConfig';
@@ -18,8 +21,17 @@ import firebaseApp from './firebaseConfig';
 // Finish any remaining auth session
 maybeCompleteAuthSession();
 
-// Initialize Firebase Auth
-const auth = getAuth(firebaseApp as FirebaseApp);
+// Initialize Firebase Auth with AsyncStorage persistence
+let auth: Auth;
+try {
+  auth = initializeAuth(firebaseApp as FirebaseApp, {
+    persistence: getReactNativePersistence(AsyncStorage)
+  });
+} catch (error) {
+  // If auth is already initialized, get the existing instance
+  console.warn('Auth may already be initialized, getting existing instance');
+  auth = getAuth(firebaseApp as FirebaseApp);
+}
 
 // Types
 export interface AuthResponse {
