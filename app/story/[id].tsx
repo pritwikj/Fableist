@@ -28,8 +28,8 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
-import { fetchStoryMetadata } from '../services/storyService';
-import type { StoryMetadata } from '../services/storyService';
+import { fetchStoryMetadata } from "../../services/storyService"
+import type { StoryMetadata } from "../../services/storyService"
 
 export default function StoryDetails() {
   const { id } = useLocalSearchParams();
