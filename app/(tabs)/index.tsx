@@ -7,13 +7,13 @@ import {
   useColorScheme,
 } from 'react-native';
 import { router } from 'expo-router';
-import { Text, View } from '../../components/Themed';
+import { Text, View } from '@/components/Themed';
 import { ActivityIndicator } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
-import { fetchAllStories } from '../services/storyService';
-import type { StoryMetadata } from '../types/story';
+import { fetchAllStories } from '@/services/storyService';
+import type { StoryMetadata } from '@/services/storyService';
 
 // Types
 type Story = StoryMetadata & {

@@ -5,8 +5,8 @@
  * accessing story data throughout the application.
  */
 
-import { Story, StoryPage, Chapter } from '../types/story';
-import { db } from './firebase';
+import { Story, StoryPage, Chapter } from '@/types/story';
+import { db } from './firebaseConfig';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 
 export interface StoryMetadata {
@@ -147,12 +147,4 @@ export async function fetchAllStories(): Promise<StoryMetadata[]> {
     console.error('Error fetching all stories:', error);
     throw error;
   }
-}
-
-const storyService = {
-  fetchStoryMetadata,
-  fetchStoryContent,
-  fetchAllStories,
-};
-
-export default storyService; 
+} 

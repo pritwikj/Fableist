@@ -28,10 +28,10 @@ import {
   View as RNView,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import { Text, View } from '../components/Themed';
+import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
-import { fetchStoryContent } from './services/storyService';
+import { fetchStoryContent } from '@/services/storyService';
 
 export default function StoryReader() {
   const { id } = useLocalSearchParams();
