@@ -4,17 +4,14 @@ import {
   signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithCredential,
   User,
   AuthError,
   initializeAuth,
   Auth
 } from 'firebase/auth';
-import { getReactNativePersistence } from 'firebase/auth/react-native';
+import { getReactNativePersistence } from 'firebase/auth';
 import { FirebaseApp } from 'firebase/app';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Google from 'expo-auth-session/providers/google';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import { maybeCompleteAuthSession } from 'expo-web-browser';
 import firebaseApp from './firebaseConfig';
 
@@ -25,7 +22,7 @@ maybeCompleteAuthSession();
 let auth: Auth;
 try {
   auth = initializeAuth(firebaseApp as FirebaseApp, {
-    persistence: getReactNativePersistence(AsyncStorage)
+    persistence: getReactNativePersistence(ReactNativeAsyncStorage)
   });
 } catch (error) {
   // If auth is already initialized, get the existing instance
@@ -62,36 +59,6 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
     return {
       user: null,
       error: authError.message || 'Failed to login'
-    };
-  }
-}
-
-// Google Authentication
-const [googleRequest, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
-  clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-  scopes: ['profile', 'email']
-});
-
-export async function signInWithGoogle(): Promise<AuthResponse> {
-  try {
-    const result = await promptGoogleAsync();
-    
-    if (result.type === 'success') {
-      const { id_token } = result.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      const userCredential = await signInWithCredential(auth, credential);
-      return { user: userCredential.user };
-    }
-    
-    return {
-      user: null,
-      error: 'Google sign in was cancelled or failed'
-    };
-  } catch (error) {
-    const authError = error as AuthError;
-    return {
-      user: null,
-      error: authError.message || 'Failed to sign in with Google'
     };
   }
 }
