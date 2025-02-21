@@ -1,18 +1,40 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { User } from 'firebase/auth';
 import 'react-native-reanimated';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { useColorScheme } from '@/components/useColorScheme';
+import { subscribeToAuthChanges } from '../services/firebaseAuth';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
+
+// This function checks if the current route is in the auth group
+function useProtectedRoute(user: User | null) {
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    const inAuthGroup = segments[0] === '(auth)';
+
+    if (!user && !inAuthGroup) {
+      // If the user is not signed in and the initial segment is not in the auth group,
+      // redirect to the sign-in page
+      router.replace('/login');
+    } else if (user && inAuthGroup) {
+      // If the user is signed in and the initial segment is in the auth group,
+      // redirect to the home page
+      router.replace('/');
+    }
+  }, [user, segments]);
+}
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -25,10 +47,23 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
+  const [user, setUser] = useState<User | null>(null);
   const [loaded, error] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
     ...FontAwesome.font,
   });
+
+  // Subscribe to auth state changes
+  useEffect(() => {
+    const unsubscribe = subscribeToAuthChanges((user) => {
+      setUser(user);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Protect routes based on authentication state
+  useProtectedRoute(user);
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.
   useEffect(() => {
@@ -56,6 +91,7 @@ function RootLayoutNav() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="story/[id]" options={{ headerShown: true }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
         </Stack>

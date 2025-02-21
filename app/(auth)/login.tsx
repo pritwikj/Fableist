@@ -10,8 +10,8 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { loginUser } from '../services/firebaseAuth';
-import { GoogleSignInButton } from '../src/components/GoogleSignInButton';
+import { loginUser } from '../../services/firebaseAuth';
+import { GoogleSignInButton } from '../../src/components/GoogleSignInButton';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');

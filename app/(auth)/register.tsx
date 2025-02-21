@@ -10,7 +10,8 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { registerUser } from '../services/firebaseAuth';
+import { registerUser } from '../../services/firebaseAuth';
+import { GoogleSignInButton } from '../../src/components/GoogleSignInButton';
 
 export default function RegisterScreen() {
   const [email, setEmail] = useState('');
@@ -96,6 +97,14 @@ export default function RegisterScreen() {
           </Text>
         </TouchableOpacity>
 
+        <View style={styles.dividerContainer}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>or</Text>
+          <View style={styles.dividerLine} />
+        </View>
+
+        <GoogleSignInButton />
+
         <TouchableOpacity
           style={styles.loginLink}
           onPress={() => router.back()}
@@ -146,6 +155,21 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#ddd',
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    color: '#666',
+    fontSize: 14,
   },
   loginLink: {
     marginTop: 15,
