@@ -17,11 +17,13 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 // This function checks if the current route is in the auth group
-function useProtectedRoute(user: User | null) {
+function useProtectedRoute(user: User | null, loaded: boolean) {
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
+    if (!loaded) return;
+
     const inAuthGroup = segments[0] === '(auth)';
 
     if (!user && !inAuthGroup) {
@@ -33,7 +35,7 @@ function useProtectedRoute(user: User | null) {
       // redirect to the home page
       router.replace('/');
     }
-  }, [user, segments]);
+  }, [user, segments, loaded]);
 }
 
 export {
@@ -63,7 +65,7 @@ export default function RootLayout() {
   }, []);
 
   // Protect routes based on authentication state
-  useProtectedRoute(user);
+  useProtectedRoute(user, loaded);
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.
   useEffect(() => {
