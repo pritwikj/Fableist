@@ -9,7 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { loginUser } from '../../services/firebaseAuth';
 import { GoogleSignInButton } from '../../src/components/GoogleSignInButton';
 
@@ -18,6 +18,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+  const { returnTo, returnToChapter } = useLocalSearchParams();
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -27,8 +28,30 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     try {
-      await loginUser(email, password);
-      router.replace('/');  // Navigate to home screen after successful login
+      const response = await loginUser(email, password);
+      if (response.error) {
+        throw new Error(response.error);
+      }
+
+      // If we have a return path and chapter, navigate there
+      if (returnTo && returnToChapter) {
+        const storyId = (returnTo as string).split('/').pop() || ''; // Extract the ID from the return path
+        if (!storyId) {
+          // If we couldn't extract the ID, fall back to home
+          router.replace('/');
+          return;
+        }
+        router.replace({
+          pathname: '/[id]' as const,
+          params: { 
+            id: storyId,
+            initialChapter: returnToChapter 
+          }
+        });
+      } else {
+        // Otherwise go to home screen
+        router.replace('/');
+      }
     } catch (error) {
       Alert.alert('Login Failed', error instanceof Error ? error.message : 'An error occurred');
     } finally {
@@ -37,7 +60,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
@@ -51,7 +74,6 @@ export default function LoginScreen() {
           onChangeText={setEmail}
           autoCapitalize="none"
           keyboardType="email-address"
-          autoComplete="email"
         />
         
         <TextInput
@@ -60,11 +82,10 @@ export default function LoginScreen() {
           value={password}
           onChangeText={setPassword}
           secureTextEntry
-          autoComplete="password"
         />
-
-        <TouchableOpacity 
-          style={styles.loginButton}
+        
+        <TouchableOpacity
+          style={[styles.button, isLoading && styles.buttonDisabled]}
           onPress={handleLogin}
           disabled={isLoading}
         >
@@ -74,13 +95,16 @@ export default function LoginScreen() {
         </TouchableOpacity>
 
         <GoogleSignInButton />
-
-        <TouchableOpacity 
-          style={styles.registerLink}
-          onPress={() => router.push('/register')}
+        
+        <TouchableOpacity
+          style={styles.linkButton}
+          onPress={() => router.push({
+            pathname: '/register' as const,
+            params: { returnTo, returnToChapter }
+          })}
         >
-          <Text style={styles.registerText}>
-            Don't have an account? Register here
+          <Text style={styles.linkText}>
+            Don't have an account? Register
           </Text>
         </TouchableOpacity>
       </View>
@@ -101,37 +125,38 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 30,
+    marginBottom: 20,
     textAlign: 'center',
   },
   input: {
-    height: 50,
     borderWidth: 1,
     borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 15,
+    padding: 15,
+    borderRadius: 10,
     marginBottom: 15,
     fontSize: 16,
   },
-  loginButton: {
-    backgroundColor: '#007AFF',
-    height: 50,
-    borderRadius: 8,
-    justifyContent: 'center',
+  button: {
+    backgroundColor: '#2b7de9',
+    padding: 15,
+    borderRadius: 10,
     alignItems: 'center',
     marginBottom: 15,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
-  registerLink: {
-    marginTop: 15,
+  linkButton: {
+    padding: 15,
     alignItems: 'center',
   },
-  registerText: {
-    color: '#007AFF',
+  linkText: {
+    color: '#2b7de9',
     fontSize: 16,
   },
 }); 

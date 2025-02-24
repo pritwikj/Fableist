@@ -35,9 +35,18 @@ export default function RegisterScreen() {
       
       // If we have a return path and chapter, navigate there
       if (returnTo && returnToChapter) {
+        const storyId = (returnTo as string).split('/').pop() || ''; // Extract the ID from the return path
+        if (!storyId) {
+          // If we couldn't extract the ID, fall back to home
+          router.replace('/');
+          return;
+        }
         router.replace({
-          pathname: returnTo as string,
-          params: { initialChapter: returnToChapter }
+          pathname: '/[id]' as const,
+          params: { 
+            id: storyId,
+            initialChapter: returnToChapter 
+          }
         });
       } else {
         // Otherwise go to home screen
@@ -89,7 +98,10 @@ export default function RegisterScreen() {
         
         <TouchableOpacity
           style={styles.linkButton}
-          onPress={() => router.push('/login')}
+          onPress={() => router.push({
+            pathname: '/login' as const,
+            params: { returnTo, returnToChapter }
+          })}
         >
           <Text style={styles.linkText}>
             Already have an account? Log in
