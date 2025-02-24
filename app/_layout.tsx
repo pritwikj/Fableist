@@ -25,9 +25,14 @@ function useProtectedRoute(user: User | null, loaded: boolean) {
     if (!loaded) return;
 
     const inAuthGroup = segments[0] === '(auth)';
+    
+    // Define protected routes - routes that require authentication
+    const protectedRoutes = ['(tabs)/profile'];
+    const currentRoute = segments.join('/');
+    const isProtectedRoute = protectedRoutes.includes(currentRoute);
 
-    if (!user && !inAuthGroup) {
-      // If the user is not signed in and the initial segment is not in the auth group,
+    if (!user && isProtectedRoute) {
+      // If the user is not signed in and trying to access a protected route,
       // redirect to the sign-in page
       router.replace('/login');
     } else if (user && inAuthGroup) {

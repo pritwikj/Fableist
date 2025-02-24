@@ -9,41 +9,40 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { registerUser } from '../../services/firebaseAuth';
 import { GoogleSignInButton } from '../../src/components/GoogleSignInButton';
 
 export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+  const { returnTo, returnToChapter } = useLocalSearchParams();
 
   const handleRegister = async () => {
-    if (!email || !password || !confirmPassword) {
+    if (!email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
-      return;
-    }
-
-    if (password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters long');
       return;
     }
 
     setIsLoading(true);
     try {
-      await registerUser(email, password);
-      Alert.alert(
-        'Success',
-        'Registration successful! Please login.',
-        [{ text: 'OK', onPress: () => router.replace('/login') }]
-      );
+      const response = await registerUser(email, password);
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      
+      // If we have a return path and chapter, navigate there
+      if (returnTo && returnToChapter) {
+        router.replace({
+          pathname: returnTo as string,
+          params: { initialChapter: returnToChapter }
+        });
+      } else {
+        // Otherwise go to home screen
+        router.replace('/');
+      }
     } catch (error) {
       Alert.alert('Registration Failed', error instanceof Error ? error.message : 'An error occurred');
     } finally {
@@ -58,7 +57,7 @@ export default function RegisterScreen() {
     >
       <View style={styles.formContainer}>
         <Text style={styles.title}>Create Account</Text>
-
+        
         <TextInput
           style={styles.input}
           placeholder="Email"
@@ -66,29 +65,18 @@ export default function RegisterScreen() {
           onChangeText={setEmail}
           autoCapitalize="none"
           keyboardType="email-address"
-          autoComplete="email"
         />
-
+        
         <TextInput
           style={styles.input}
           placeholder="Password"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
-          autoComplete="password-new"
         />
-
-        <TextInput
-          style={styles.input}
-          placeholder="Confirm Password"
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-          secureTextEntry
-          autoComplete="password-new"
-        />
-
+        
         <TouchableOpacity
-          style={styles.registerButton}
+          style={[styles.button, isLoading && styles.buttonDisabled]}
           onPress={handleRegister}
           disabled={isLoading}
         >
@@ -97,20 +85,14 @@ export default function RegisterScreen() {
           </Text>
         </TouchableOpacity>
 
-        <View style={styles.dividerContainer}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
         <GoogleSignInButton />
-
+        
         <TouchableOpacity
-          style={styles.loginLink}
-          onPress={() => router.back()}
+          style={styles.linkButton}
+          onPress={() => router.push('/login')}
         >
-          <Text style={styles.loginText}>
-            Already have an account? Login here
+          <Text style={styles.linkText}>
+            Already have an account? Log in
           </Text>
         </TouchableOpacity>
       </View>
@@ -131,52 +113,38 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 30,
+    marginBottom: 20,
     textAlign: 'center',
   },
   input: {
-    height: 50,
     borderWidth: 1,
     borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 15,
+    padding: 15,
+    borderRadius: 10,
     marginBottom: 15,
     fontSize: 16,
   },
-  registerButton: {
-    backgroundColor: '#007AFF',
-    height: 50,
-    borderRadius: 8,
-    justifyContent: 'center',
+  button: {
+    backgroundColor: '#2b7de9',
+    padding: 15,
+    borderRadius: 10,
     alignItems: 'center',
     marginBottom: 15,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 15,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#ddd',
-  },
-  dividerText: {
-    marginHorizontal: 10,
-    color: '#666',
-    fontSize: 14,
-  },
-  loginLink: {
-    marginTop: 15,
+  linkButton: {
+    padding: 15,
     alignItems: 'center',
   },
-  loginText: {
-    color: '#007AFF',
+  linkText: {
+    color: '#2b7de9',
     fontSize: 16,
   },
 }); 

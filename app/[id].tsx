@@ -27,14 +27,15 @@ import {
   Text as RNText,
   View as RNView,
 } from 'react-native';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
 import { fetchStoryContent } from '@/services/storyService';
+import { isAuthenticated } from '@/services/firebaseAuth';
 
 export default function StoryReader() {
-  const { id } = useLocalSearchParams();
+  const { id, initialChapter } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
   const [currentPageIndex, setCurrentPageIndex] = useState(-1);
@@ -53,6 +54,8 @@ export default function StoryReader() {
     queryFn: () => fetchStoryContent(id as string),
   });
 
+  const router = useRouter();
+
   // Safe to use in effects since undefined is handled
   const currentChapter = story?.chapters[currentChapterIndex];
   const currentPage = currentChapter?.pages[currentPageIndex];
@@ -70,6 +73,17 @@ export default function StoryReader() {
       showChoices();
     }
   }, [currentChapterIndex, currentPageIndex, currentPage, selectedChoice]);
+
+  // Handle initial chapter after registration
+  useEffect(() => {
+    if (story && initialChapter && currentChapterIndex === 0) {
+      const targetChapter = parseInt(initialChapter as string, 10);
+      if (!isNaN(targetChapter) && targetChapter > 0 && targetChapter < story.chapters.length) {
+        setCurrentChapterIndex(targetChapter);
+        setCurrentPageIndex(0);
+      }
+    }
+  }, [story, initialChapter]);
 
   if (isLoading) {
     return (
@@ -156,6 +170,31 @@ export default function StoryReader() {
         Alert.alert('Make a choice', 'Please select a choice before continuing.');
         return;
       }
+    }
+
+    // Check if we're at the end of the first chapter and user is not authenticated
+    if (currentChapter && 
+        currentPageIndex === currentChapter.pages.length - 1 && 
+        currentChapterIndex === 0 && 
+        !isAuthenticated()) {
+      Alert.alert(
+        'Sign Up Required',
+        'To continue reading further chapters, please register for an account.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { 
+            text: 'Register', 
+            onPress: () => router.push({
+              pathname: '/register',
+              params: { 
+                returnTo: `/${id}`,
+                returnToChapter: '1'  // We want to return to chapter 1 (index 1)
+              }
+            })
+          }
+        ]
+      );
+      return;
     }
 
     animateContentChange(() => {
