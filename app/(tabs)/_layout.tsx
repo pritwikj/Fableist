@@ -10,8 +10,9 @@ import { useClientOnlyValue } from '@/components/useClientOnlyValue';
 // Define the tab route types for type safety
 type TabRoutes = {
   index: undefined; // Stories tab
+  library: undefined; // Library tab
   profile: undefined;
-  [id]: { id: string }; // Dynamic story route
+  'story/[id]': { id: string }; // Dynamic story route
 };
 
 // You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
@@ -40,6 +41,14 @@ export default function TabLayout() {
           title: 'Stories',
           tabBarIcon: ({ color }) => <TabBarIcon name="book" color={color} />,
           headerTitle: 'Stories',
+        }}
+      />
+      <Tabs.Screen
+        name="library"
+        options={{
+          title: 'Library',
+          tabBarIcon: ({ color }) => <TabBarIcon name="bookmark" color={color} />,
+          headerTitle: 'My Library',
         }}
       />
       <Tabs.Screen

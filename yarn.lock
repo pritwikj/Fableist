@@ -2264,6 +2264,11 @@
   dependencies:
     web-streams-polyfill "^3.1.1"
 
+"@revenuecat/purchases-typescript-internal@13.21.0":
+  version "13.21.0"
+  resolved "https://registry.yarnpkg.com/@revenuecat/purchases-typescript-internal/-/purchases-typescript-internal-13.21.0.tgz#0b055848c66feb235594ae877062e1f7bd5dc006"
+  integrity sha512-4pJa3OkCL+o7EGHm2dNzMwqPMh9mfTjDapq8hKC6kkIDa8cmgs9kMHxDZfi0mMKY4a+E3mfMX0f+5KR2NjuG9w==
+
 "@segment/loosely-validate-event@^2.0.0":
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/@segment/loosely-validate-event/-/loosely-validate-event-2.0.0.tgz#87dfc979e5b4e7b82c5f1d8b722dfd5d77644681"
@@ -3789,7 +3794,7 @@ expo-asset@~11.0.4:
     invariant "^2.2.4"
     md5-file "^3.2.3"
 
-expo-auth-session@~6.0.0:
+expo-auth-session@~6.0.3:
   version "6.0.3"
   resolved "https://registry.yarnpkg.com/expo-auth-session/-/expo-auth-session-6.0.3.tgz#2a31afca4b0c3654b02ca69c88e897266ff63863"
   integrity sha512-s7LmmMPiiY1NXrlcXkc4+09Hlfw9X1CpaQOCDkwfQEodG1uCYGQi/WImTnDzw5YDkWI79uC8F1mB8EIerilkDA==
@@ -6543,6 +6548,13 @@ react-native-is-edge-to-edge@^1.1.6:
   version "1.1.6"
   resolved "https://registry.yarnpkg.com/react-native-is-edge-to-edge/-/react-native-is-edge-to-edge-1.1.6.tgz#69ec13f70d76e9245e275eed4140d0873a78f902"
   integrity sha512-1pHnFTlBahins6UAajXUqeCOHew9l9C2C8tErnpGC3IyLJzvxD+TpYAixnCbrVS52f7+NvMttbiSI290XfwN0w==
+
+react-native-purchases@^8.7.0:
+  version "8.7.0"
+  resolved "https://registry.yarnpkg.com/react-native-purchases/-/react-native-purchases-8.7.0.tgz#65e26b55e31353a4af054e533bb51064f7b57614"
+  integrity sha512-aw2XPtpSISiKn6JNo9MeEjPeN4ArzneZVfmXOxy7bVH2RdMhRiCm2S7LgixModdxSpVaMAXZaXU7aLFffMtTZw==
+  dependencies:
+    "@revenuecat/purchases-typescript-internal" "13.21.0"
 
 react-native-reanimated@~3.16.1:
   version "3.16.7"

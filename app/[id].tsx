@@ -31,17 +31,18 @@ import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
-import { fetchStoryContent } from '@/services/storyService';
+import { fetchStoryContent, updateReadingProgress } from '@/services/storyService';
 import { isAuthenticated } from '@/services/firebaseAuth';
 
 export default function StoryReader() {
-  const { id, initialChapter } = useLocalSearchParams();
+  const { id, initialChapter, currentPageIndex: savedPageIndex } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
   const [currentPageIndex, setCurrentPageIndex] = useState(-1);
   const [characterName, setCharacterName] = useState('');
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [showingResponse, setShowingResponse] = useState(false);
+  const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
   
   // Add animation values
   const fadeAnim = React.useRef(new Animated.Value(1)).current;
@@ -84,6 +85,48 @@ export default function StoryReader() {
       }
     }
   }, [story, initialChapter]);
+
+  // Handle navigation to saved page position from library
+  useEffect(() => {
+    if (story && savedPageIndex && !isNavigatingToSavedPosition) {
+      const pageIndexToNavigate = parseInt(typeof savedPageIndex === 'string' ? savedPageIndex : Array.isArray(savedPageIndex) ? savedPageIndex[0] : '0', 10);
+      
+      if (!isNaN(pageIndexToNavigate) && pageIndexToNavigate >= 0) {
+        setIsNavigatingToSavedPosition(true);
+        
+        // Calculate which chapter this page belongs to
+        let foundPage = false;
+        let totalPagesPassed = 0;
+        
+        for (let chapterIdx = 0; chapterIdx < story.chapters.length; chapterIdx++) {
+          const chapter = story.chapters[chapterIdx];
+          const chapterPageCount = chapter.pages.length;
+          
+          if (totalPagesPassed + chapterPageCount > pageIndexToNavigate) {
+            // We found the chapter containing our target page
+            const pageInChapter = pageIndexToNavigate - totalPagesPassed;
+            
+            // Set the correct chapter and page
+            setCurrentChapterIndex(chapterIdx);
+            setCurrentPageIndex(pageInChapter);
+            foundPage = true;
+            break;
+          }
+          
+          totalPagesPassed += chapterPageCount;
+        }
+        
+        // If we couldn't find the page (e.g., invalid index), default to the first page
+        if (!foundPage) {
+          setCurrentChapterIndex(0);
+          setCurrentPageIndex(0);
+        }
+        
+        // Once navigation completes, log it for debugging
+        console.log(`Navigated to absolute page index ${pageIndexToNavigate}`);
+      }
+    }
+  }, [story, savedPageIndex, isNavigatingToSavedPosition]);
 
   if (isLoading) {
     return (
@@ -198,14 +241,41 @@ export default function StoryReader() {
     }
 
     animateContentChange(() => {
+      // Calculate next page position
+      let nextChapterIndex = currentChapterIndex;
+      let nextPageIndex = currentPageIndex;
+      
       // If we're at the end of the current chapter but not the last chapter
       if (currentChapter && currentPageIndex === currentChapter.pages.length - 1 && 
           currentChapterIndex < story.chapters.length - 1) {
-        setCurrentChapterIndex(prev => prev + 1);
-        setCurrentPageIndex(0);
+        nextChapterIndex = currentChapterIndex + 1;
+        nextPageIndex = 0;
       } else if (!isLastPage) {
-        setCurrentPageIndex(prev => prev + 1);
+        nextPageIndex = currentPageIndex + 1;
       }
+      
+      // Update state
+      setCurrentChapterIndex(nextChapterIndex);
+      setCurrentPageIndex(nextPageIndex);
+      
+      // Calculate absolute page index for progress tracking
+      let absolutePageIndex = 0;
+      for (let i = 0; i < nextChapterIndex; i++) {
+        absolutePageIndex += story.chapters[i].pages.length;
+      }
+      absolutePageIndex += nextPageIndex;
+      
+      // Save reading progress if authenticated
+      if (isAuthenticated() && id) {
+        updateReadingProgress(id as string, absolutePageIndex.toString())
+          .then(result => {
+            if (!result.success) {
+              console.error("Failed to update reading progress:", result.error);
+            }
+          })
+          .catch((error: unknown) => console.error("Error updating reading progress:", error));
+      }
+      
       setSelectedChoice(null);
       setShowingResponse(false);
       choicesFadeAnim.setValue(0);
@@ -216,14 +286,41 @@ export default function StoryReader() {
   const handlePreviousPage = () => {
     if (!isFirstPage) {
       animateContentChange(() => {
+        // Calculate previous page position
+        let prevChapterIndex = currentChapterIndex;
+        let prevPageIndex = currentPageIndex;
+        
         // If we're at the start of a chapter (but not the first chapter)
         if (currentPageIndex === 0 && currentChapterIndex > 0) {
-          setCurrentChapterIndex(prev => prev - 1);
-          const previousChapter = story.chapters[currentChapterIndex - 1];
-          setCurrentPageIndex(previousChapter.pages.length - 1);
+          prevChapterIndex = currentChapterIndex - 1;
+          const previousChapter = story.chapters[prevChapterIndex];
+          prevPageIndex = previousChapter.pages.length - 1;
         } else {
-          setCurrentPageIndex(prev => prev - 1);
+          prevPageIndex = currentPageIndex - 1;
         }
+        
+        // Update state
+        setCurrentChapterIndex(prevChapterIndex);
+        setCurrentPageIndex(prevPageIndex);
+        
+        // Calculate absolute page index for progress tracking
+        let absolutePageIndex = 0;
+        for (let i = 0; i < prevChapterIndex; i++) {
+          absolutePageIndex += story.chapters[i].pages.length;
+        }
+        absolutePageIndex += prevPageIndex;
+        
+        // Save reading progress if authenticated
+        if (isAuthenticated() && id) {
+          updateReadingProgress(id as string, absolutePageIndex.toString())
+            .then(result => {
+              if (!result.success) {
+                console.error("Failed to update reading progress:", result.error);
+              }
+            })
+            .catch((error: unknown) => console.error("Error updating reading progress:", error));
+        }
+        
         setSelectedChoice(null);
         setShowingResponse(false);
         choicesFadeAnim.setValue(0);
