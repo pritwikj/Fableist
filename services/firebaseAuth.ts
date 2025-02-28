@@ -14,6 +14,7 @@ import { FirebaseApp } from 'firebase/app';
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import { maybeCompleteAuthSession } from 'expo-web-browser';
 import firebaseApp from './firebaseConfig';
+import { createUserDocument } from './userService';
 
 // Finish any remaining auth session
 maybeCompleteAuthSession();
@@ -40,6 +41,10 @@ export interface AuthResponse {
 export async function registerUser(email: string, password: string): Promise<AuthResponse> {
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    
+    // Create user document in Firestore with default fields
+    await createUserDocument(userCredential.user);
+    
     return { user: userCredential.user };
   } catch (error) {
     const authError = error as AuthError;

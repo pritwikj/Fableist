@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { useColorScheme } from '@/components/useColorScheme';
 import { subscribeToAuthChanges } from '../services/firebaseAuth';
+import { createUserDocument } from '../services/userService';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -62,8 +63,17 @@ export default function RootLayout() {
 
   // Subscribe to auth state changes
   useEffect(() => {
-    const unsubscribe = subscribeToAuthChanges((user) => {
+    const unsubscribe = subscribeToAuthChanges(async (user) => {
       setUser(user);
+      
+      // If a user has logged in, ensure they have a user document
+      if (user) {
+        try {
+          await createUserDocument(user);
+        } catch (error) {
+          console.error('Error ensuring user document exists:', error);
+        }
+      }
     });
 
     return () => unsubscribe();

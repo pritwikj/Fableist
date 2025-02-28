@@ -22,6 +22,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { fetchStoryMetadata, StoryMetadata } from './storyService';
+import { User } from 'firebase/auth';
 
 // Types
 export interface LibraryItem {
@@ -30,6 +31,43 @@ export interface LibraryItem {
   currentPage: string;
   lastReadTimestamp: Timestamp;
   story?: StoryMetadata; // Joined story data
+}
+
+/**
+ * Creates a new user document in Firestore with default fields
+ * @param user The Firebase Auth user object
+ * @returns Promise that resolves when the user document is created
+ */
+export async function createUserDocument(user: User): Promise<void> {
+  try {
+    if (!user) {
+      throw new Error('User object is required');
+    }
+    
+    const userId = user.uid;
+    const userRef = doc(db, 'users', userId);
+    
+    // Check if the user document already exists
+    const userDoc = await getDoc(userRef);
+    
+    if (!userDoc.exists()) {
+      // Create new user document with default fields
+      const userData = {
+        coins: 20, // Default starting coins
+        displayName: user.displayName || user.email?.split('@')[0] || 'User',
+        email: user.email,
+        joinDate: serverTimestamp(),
+      };
+      
+      await setDoc(userRef, userData);
+      console.log(`Created new user document for ${userId}`);
+    } else {
+      console.log(`User document already exists for ${userId}`);
+    }
+  } catch (error) {
+    console.error('Error creating user document:', error);
+    throw error;
+  }
 }
 
 /**

@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import * as Google from 'expo-auth-session/providers/google';
 import { GoogleAuthProvider, signInWithCredential, getAuth, User, AuthError } from 'firebase/auth';
 import firebaseApp from '../../services/firebaseConfig';
+import { createUserDocument } from '../../services/userService';
 
 // Types
 export interface AuthResponse {
@@ -25,6 +26,10 @@ export function useGoogleSignIn() {
         const { id_token } = result.params;
         const credential = GoogleAuthProvider.credential(id_token);
         const userCredential = await signInWithCredential(auth, credential);
+        
+        // Create user document in Firestore with default fields
+        await createUserDocument(userCredential.user);
+        
         return { user: userCredential.user };
       }
       
