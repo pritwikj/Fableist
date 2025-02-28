@@ -5,9 +5,9 @@
  * accessing story data throughout the application.
  */
 
-import { Story, StoryPage, Chapter } from '@/types/story';
+import { Story, Chapter, StorySegment } from '@/types/story';
 import { db } from './firebaseConfig';
-import { collection, doc, getDoc, getDocs, query, where, setDoc, Timestamp, DocumentReference, addDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where, setDoc, Timestamp, DocumentReference, addDoc, collectionGroup } from 'firebase/firestore';
 import { getCurrentUser, isAuthenticated } from './firebaseAuth';
 
 export interface StoryMetadata {
@@ -75,7 +75,7 @@ export async function fetchStoryMetadata(id: string): Promise<StoryMetadata> {
 }
 
 /**
- * Fetches complete story content including all chapters and their pages
+ * Fetches complete story content including all chapters and their segments
  * @param id Story ID to fetch
  * @returns Promise resolving to complete story data
  */
@@ -92,48 +92,22 @@ export async function fetchStoryContent(id: string): Promise<Story> {
       throw new Error(`No chapters found for story ${id}`);
     }
 
-    // Fetch pages for each chapter
-    const chapters: Chapter[] = await Promise.all(
-      chaptersSnapshot.docs.map(async (chapterDoc) => {
-        const chapterData = chapterDoc.data();
-        
-        // Get pages from the nested subcollection
-        const pagesRef = collection(chaptersRef, chapterDoc.id, 'pages');
-        const pagesSnapshot = await getDocs(pagesRef);
-
-        if (pagesSnapshot.empty) {
-          console.warn(`No pages found for chapter ${chapterDoc.id} in story ${id}`);
-          return {
-            title: chapterData.title,
-            pages: [],
-          };
-        }
-
-        // Convert pages to array and sort by page number/id
-        const pages: StoryPage[] = pagesSnapshot.docs
-          .map(doc => {
-            const data = doc.data();
-            return {
-              id: doc.id,
-              mainContent: data.mainContent,
-              decisionPoint: data.decisionPoint ? {
-                choices: data.decisionPoint.choices,
-                responses: data.decisionPoint.responses,
-                remainingContent: data.decisionPoint.remainingContent,
-              } : undefined,
-            };
-          })
-          .sort((a, b) => a.id.localeCompare(b.id));
-
-        return {
-          title: chapterData.title,
-          pages,
-        };
-      })
-    );
+    // Process chapters and their segments
+    const chapters: Chapter[] = chaptersSnapshot.docs.map(chapterDoc => {
+      const chapterData = chapterDoc.data();
+      
+      // Process segments from the chapter data
+      const segments: StorySegment[] = chapterData.segments || [];
+      
+      return {
+        id: chapterDoc.id,
+        title: chapterData.title,
+        segments: segments,
+      };
+    });
 
     // Sort chapters by their document IDs
-    chapters.sort((a, b) => a.title.localeCompare(b.title));
+    chapters.sort((a, b) => a.id.localeCompare(b.id));
 
     // Combine metadata and chapters
     return {

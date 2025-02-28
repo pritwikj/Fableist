@@ -3,29 +3,32 @@
  */
 
 /**
- * Represents a decision point in a story page
+ * Represents a decision point in a story segment
  */
 export interface DecisionPoint {
+  id: string;
   choices: string[];
   responses: { [key: string]: string };
-  remainingContent: string;
 }
 
 /**
- * Represents a single page in a story
+ * Represents a segment in a story chapter
  */
-export interface StoryPage {
-  id: string;
-  mainContent: string;
-  decisionPoint?: DecisionPoint;
+export interface StorySegment {
+  type: 'text' | 'decisionPoint';
+  content?: string;
+  id?: string;
+  choices?: string[];
+  responses?: { [key: string]: string };
 }
 
 /**
  * Represents a chapter in a story
  */
 export interface Chapter {
+  id: string;
   title: string;
-  pages: StoryPage[];
+  segments: StorySegment[];
 }
 
 /**

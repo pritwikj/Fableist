@@ -2,15 +2,16 @@
  * Story Reader Screen Component
  * 
  * This is the main screen for reading an interactive story. It handles:
- * - Loading and displaying story content page by page
+ * - Loading and displaying story content chapter by chapter
  * - Character name input on the first page
  * - Decision points where users can make choices
- * - Navigation between pages and chapters
+ * - Navigation between chapters
  * - Animated text transitions
  * - Dark/light mode theming
+ * - Registration requirement after the first chapter
  *
- * Story content is structured into pages with optional decision points that affect
- * the narrative flow. The first page always prompts for the character's name which is then used throughout the story.
+ * Story content is structured into chapters with segments that can be text or decision points.
+ * The first page always prompts for the character's name which is then used throughout the story.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -38,7 +39,7 @@ export default function StoryReader() {
   const { id, initialChapter, currentPageIndex: savedPageIndex } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
-  const [currentPageIndex, setCurrentPageIndex] = useState(-1);
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
   const [characterName, setCharacterName] = useState('');
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [showingResponse, setShowingResponse] = useState(false);
@@ -59,7 +60,8 @@ export default function StoryReader() {
 
   // Safe to use in effects since undefined is handled
   const currentChapter = story?.chapters[currentChapterIndex];
-  const currentPage = currentChapter?.pages[currentPageIndex];
+  const currentSegment = currentChapter?.segments[currentSegmentIndex];
+  const isFirstPage = currentSegmentIndex === -1;
 
   useEffect(() => {
     if (story) {
@@ -68,12 +70,12 @@ export default function StoryReader() {
   }, [story]);
 
   useEffect(() => {
-    // Move condition inside the effect
-    const shouldShowChoices = currentPage?.decisionPoint && !selectedChoice;
+    // Show choices if the current segment is a decision point and no choice has been made
+    const shouldShowChoices = currentSegment?.type === 'decisionPoint' && !selectedChoice;
     if (shouldShowChoices) {
       showChoices();
     }
-  }, [currentChapterIndex, currentPageIndex, currentPage, selectedChoice]);
+  }, [currentChapterIndex, currentSegmentIndex, currentSegment, selectedChoice]);
 
   // Handle initial chapter after registration
   useEffect(() => {
@@ -81,7 +83,7 @@ export default function StoryReader() {
       const targetChapter = parseInt(initialChapter as string, 10);
       if (!isNaN(targetChapter) && targetChapter > 0 && targetChapter < story.chapters.length) {
         setCurrentChapterIndex(targetChapter);
-        setCurrentPageIndex(0);
+        setCurrentSegmentIndex(0);
       }
     }
   }, [story, initialChapter]);
@@ -94,87 +96,93 @@ export default function StoryReader() {
       if (!isNaN(pageIndexToNavigate) && pageIndexToNavigate >= 0) {
         setIsNavigatingToSavedPosition(true);
         
+        // Skip the character name input screen if we're navigating to a saved position
+        if (currentSegmentIndex === -1) {
+          setCurrentSegmentIndex(0);
+        }
+        
         // Calculate which chapter this page belongs to
         let foundPage = false;
-        let totalPagesPassed = 0;
+        let totalSegmentsPassed = 0;
         
-        for (let chapterIdx = 0; chapterIdx < story.chapters.length; chapterIdx++) {
-          const chapter = story.chapters[chapterIdx];
-          const chapterPageCount = chapter.pages.length;
-          
-          if (totalPagesPassed + chapterPageCount > pageIndexToNavigate) {
-            // We found the chapter containing our target page
-            const pageInChapter = pageIndexToNavigate - totalPagesPassed;
-            
-            // Set the correct chapter and page
-            setCurrentChapterIndex(chapterIdx);
-            setCurrentPageIndex(pageInChapter);
+        for (let i = 0; i < story.chapters.length; i++) {
+          const chapter = story.chapters[i];
+          if (totalSegmentsPassed + chapter.segments.length > pageIndexToNavigate) {
+            // Found the chapter containing our target page
+            setCurrentChapterIndex(i);
+            setCurrentSegmentIndex(pageIndexToNavigate - totalSegmentsPassed);
             foundPage = true;
             break;
           }
-          
-          totalPagesPassed += chapterPageCount;
+          totalSegmentsPassed += chapter.segments.length;
         }
         
-        // If we couldn't find the page (e.g., invalid index), default to the first page
         if (!foundPage) {
+          // If we couldn't find the exact page, just go to the first segment
           setCurrentChapterIndex(0);
-          setCurrentPageIndex(0);
+          setCurrentSegmentIndex(0);
         }
-        
-        // Once navigation completes, log it for debugging
-        console.log(`Navigated to absolute page index ${pageIndexToNavigate}`);
       }
     }
   }, [story, savedPageIndex, isNavigatingToSavedPosition]);
 
-  if (isLoading) {
-    return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color={colorScheme === 'dark' ? '#4a9eff' : '#2b7de9'} />
-      </View>
-    );
-  }
+  // Update reading progress when page changes
+  useEffect(() => {
+    if (isAuthenticated() && story && currentChapter && !isFirstPage) {
+      // Calculate the absolute page index across all chapters
+      let absolutePageIndex = 0;
+      for (let i = 0; i < currentChapterIndex; i++) {
+        absolutePageIndex += story.chapters[i].segments.length;
+      }
+      absolutePageIndex += currentSegmentIndex;
+      
+      // Update reading progress in Firestore
+      updateReadingProgress(story.id, absolutePageIndex.toString())
+        .catch(error => console.error('Failed to update reading progress:', error));
+    }
+  }, [currentChapterIndex, currentSegmentIndex, story, isFirstPage]);
 
-  if (error || !story) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.errorText}>Failed to load story</Text>
-      </View>
-    );
-  }
-
-  const isFirstPage = currentPageIndex === -1;
-  const isLastPage = currentChapterIndex === story.chapters.length - 1 && 
-                    currentChapter && currentPageIndex === currentChapter.pages.length - 1;
+  // Configure the navigation header
+  useEffect(() => {
+    if (story) {
+      router.setParams({
+        title: story.title,
+      });
+    }
+  }, [story?.title]);
 
   const animateContentChange = (callback?: () => void) => {
-    Animated.sequence([
+    // Fade out current content
+    Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 200,
         useNativeDriver: true,
-        easing: Easing.out(Easing.ease),
       }),
       Animated.timing(slideAnim, {
-        toValue: -20,
-        duration: 0,
+        toValue: -50,
+        duration: 200,
         useNativeDriver: true,
       }),
     ]).start(() => {
+      // Execute callback (page change logic)
       if (callback) callback();
+      
+      // Reset animation values
+      slideAnim.setValue(50);
+      
+      // Fade in new content
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 300,
+          duration: 200,
           useNativeDriver: true,
-          easing: Easing.out(Easing.ease),
         }),
         Animated.timing(slideAnim, {
           toValue: 0,
-          duration: 300,
+          duration: 200,
+          easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
-          easing: Easing.out(Easing.ease),
         }),
       ]).start();
     });
@@ -186,7 +194,6 @@ export default function StoryReader() {
       duration: 500,
       delay: 500,
       useNativeDriver: true,
-      easing: Easing.out(Easing.ease),
     }).start();
   };
 
@@ -195,30 +202,35 @@ export default function StoryReader() {
       toValue: 1,
       duration: 500,
       useNativeDriver: true,
-      easing: Easing.out(Easing.ease),
     }).start();
   };
 
-  const handleNextPage = () => {
+  const handleNextSegment = () => {
+    if (!story || !currentChapter) return;
+    
     // First page validation - require character name
     if (isFirstPage) {
       if (!characterName.trim()) {
         Alert.alert('Name Required', 'Please enter a name before continuing.');
         return;
       }
+      
+      // Move from name input screen to first actual segment
+      animateContentChange(() => {
+        setCurrentSegmentIndex(0); // Start at the first segment (index 0)
+      });
+      return;
     }
-    // Only check for decisions if we're not on the first page
-    else if (currentPage?.decisionPoint && !showingResponse) {
-      if (!selectedChoice) {
-        Alert.alert('Make a choice', 'Please select a choice before continuing.');
-        return;
-      }
+    
+    // If we're at a decision point and haven't made a choice yet, don't proceed
+    if (currentSegment?.type === 'decisionPoint' && !selectedChoice) {
+      Alert.alert('Make a choice', 'Please select one of the options to continue.');
+      return;
     }
-
+    
     // Check if we're at the end of the first chapter and user is not authenticated
-    if (currentChapter && 
-        currentPageIndex === currentChapter.pages.length - 1 && 
-        currentChapterIndex === 0 && 
+    if (currentChapterIndex === 0 && 
+        currentSegmentIndex === currentChapter.segments.length - 1 && 
         !isAuthenticated()) {
       Alert.alert(
         'Sign Up Required',
@@ -239,94 +251,74 @@ export default function StoryReader() {
       );
       return;
     }
-
+    
     animateContentChange(() => {
-      // Calculate next page position
-      let nextChapterIndex = currentChapterIndex;
-      let nextPageIndex = currentPageIndex;
-      
-      // If we're at the end of the current chapter but not the last chapter
-      if (currentChapter && currentPageIndex === currentChapter.pages.length - 1 && 
-          currentChapterIndex < story.chapters.length - 1) {
-        nextChapterIndex = currentChapterIndex + 1;
-        nextPageIndex = 0;
-      } else if (!isLastPage) {
-        nextPageIndex = currentPageIndex + 1;
-      }
-      
-      // Update state
-      setCurrentChapterIndex(nextChapterIndex);
-      setCurrentPageIndex(nextPageIndex);
-      
-      // Calculate absolute page index for progress tracking
-      let absolutePageIndex = 0;
-      for (let i = 0; i < nextChapterIndex; i++) {
-        absolutePageIndex += story.chapters[i].pages.length;
-      }
-      absolutePageIndex += nextPageIndex;
-      
-      // Save reading progress if authenticated
-      if (isAuthenticated() && id) {
-        updateReadingProgress(id as string, absolutePageIndex.toString())
-          .then(result => {
-            if (!result.success) {
-              console.error("Failed to update reading progress:", result.error);
-            }
-          })
-          .catch((error: unknown) => console.error("Error updating reading progress:", error));
-      }
-      
+      // Reset choice state
       setSelectedChoice(null);
       setShowingResponse(false);
+      
+      // Reset animation values
       choicesFadeAnim.setValue(0);
       responseFadeAnim.setValue(0);
+      
+      // Check if we're at the end of the current chapter
+      if (currentSegmentIndex >= currentChapter.segments.length - 1) {
+        // Check if we're at the last chapter
+        if (currentChapterIndex >= story.chapters.length - 1) {
+          // We're at the end of the story
+          Alert.alert(
+            'End of Story',
+            'You have reached the end of this story.',
+            [
+              {
+                text: 'Return to Home',
+                onPress: () => router.push('/'),
+              },
+            ]
+          );
+          return;
+        }
+        
+        // Move to the next chapter
+        setCurrentChapterIndex(currentChapterIndex + 1);
+        setCurrentSegmentIndex(0);
+      } else {
+        // Move to the next segment in the current chapter
+        setCurrentSegmentIndex(currentSegmentIndex + 1);
+      }
     });
   };
 
-  const handlePreviousPage = () => {
-    if (!isFirstPage) {
-      animateContentChange(() => {
-        // Calculate previous page position
-        let prevChapterIndex = currentChapterIndex;
-        let prevPageIndex = currentPageIndex;
-        
-        // If we're at the start of a chapter (but not the first chapter)
-        if (currentPageIndex === 0 && currentChapterIndex > 0) {
-          prevChapterIndex = currentChapterIndex - 1;
-          const previousChapter = story.chapters[prevChapterIndex];
-          prevPageIndex = previousChapter.pages.length - 1;
-        } else {
-          prevPageIndex = currentPageIndex - 1;
-        }
-        
-        // Update state
-        setCurrentChapterIndex(prevChapterIndex);
-        setCurrentPageIndex(prevPageIndex);
-        
-        // Calculate absolute page index for progress tracking
-        let absolutePageIndex = 0;
-        for (let i = 0; i < prevChapterIndex; i++) {
-          absolutePageIndex += story.chapters[i].pages.length;
-        }
-        absolutePageIndex += prevPageIndex;
-        
-        // Save reading progress if authenticated
-        if (isAuthenticated() && id) {
-          updateReadingProgress(id as string, absolutePageIndex.toString())
-            .then(result => {
-              if (!result.success) {
-                console.error("Failed to update reading progress:", result.error);
-              }
-            })
-            .catch((error: unknown) => console.error("Error updating reading progress:", error));
-        }
-        
-        setSelectedChoice(null);
-        setShowingResponse(false);
-        choicesFadeAnim.setValue(0);
-        responseFadeAnim.setValue(0);
-      });
+  const handlePreviousSegment = () => {
+    if (!story || !currentChapter) return;
+    
+    // Don't allow going back from the first segment of the first chapter
+    if (currentChapterIndex === 0 && currentSegmentIndex <= 0) {
+      return;
     }
+    
+    animateContentChange(() => {
+      // Reset choice state
+      setSelectedChoice(null);
+      setShowingResponse(false);
+      
+      // Reset animation values
+      choicesFadeAnim.setValue(0);
+      responseFadeAnim.setValue(0);
+      
+      // Check if we're at the beginning of the current chapter
+      if (currentSegmentIndex <= 0) {
+        // Move to the previous chapter
+        const previousChapterIndex = currentChapterIndex - 1;
+        const previousChapter = story.chapters[previousChapterIndex];
+        
+        setCurrentChapterIndex(previousChapterIndex);
+        setCurrentSegmentIndex(previousChapter.segments.length - 1);
+      } else {
+        // Move to the previous segment in the current chapter
+        setCurrentSegmentIndex(currentSegmentIndex - 1);
+      }
+    });
   };
 
   const handleChoice = (choice: string) => {
@@ -340,7 +332,7 @@ export default function StoryReader() {
       return (
         <View style={styles.firstPageContainer}>
           <Text style={styles.storyTitle}>
-            Welcome to {story.title}
+            Welcome to {story?.title}
           </Text>
           <Text style={styles.namePrompt}>
             Before we begin your adventure, what shall we call you?
@@ -359,135 +351,194 @@ export default function StoryReader() {
       );
     }
 
-    if (!currentChapter || !currentPage) {
+    if (!currentChapter || !currentSegment) {
       return (
         <Text style={styles.errorText}>
-          Error: Could not load chapter or page content
+          Error: Could not load chapter or segment content
         </Text>
       );
     }
 
-    const processedContent = currentPage.mainContent.replace(
-      /{characterName}/g,
-      characterName
-    );
+    if (currentSegment.type === 'text') {
+      const processedContent = currentSegment.content?.replace(
+        /({characterName}|{YN})/g,
+        characterName
+      ) || '';
 
-    return (
-      <>
-        <Text style={styles.chapterTitle}>
-          {currentChapter.title}
-        </Text>
-        <RNText style={{
-          fontSize: 18,
-          marginBottom: 20,
-          color: '#000'
-        }}>
-          {processedContent}
-        </RNText>
-        
-        {currentPage.decisionPoint && !showingResponse && (
-          <View style={styles.decisionContainer}>
-            {currentPage.decisionPoint.choices.map((choice) => (
-              <TouchableOpacity
-                key={choice}
-                style={[
-                  styles.choiceButton,
-                  {
-                    backgroundColor:
-                      selectedChoice === choice
-                        ? colorScheme === 'dark'
-                          ? '#4a9eff'
-                          : '#2b7de9'
-                        : 'transparent',
-                    borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
-                  },
-                ]}
-                onPress={() => handleChoice(choice)}
-              >
-                <Text
+      return (
+        <>
+          <Text style={styles.chapterTitle}>
+            {currentChapter.title}
+          </Text>
+          <RNText style={{
+            fontSize: 18,
+            marginBottom: 20,
+            color: colorScheme === 'dark' ? '#fff' : '#000'
+          }}>
+            {processedContent}
+          </RNText>
+        </>
+      );
+    }
+
+    if (currentSegment.type === 'decisionPoint') {
+      return (
+        <>
+          <Text style={styles.chapterTitle}>
+            {currentChapter.title}
+          </Text>
+          
+          {!showingResponse && (
+            <View style={styles.decisionContainer}>
+              {currentSegment.choices?.map((choice) => (
+                <TouchableOpacity
+                  key={choice}
                   style={[
-                    styles.choiceText,
-                    selectedChoice === choice && styles.selectedChoiceText,
+                    styles.choiceButton,
+                    {
+                      backgroundColor:
+                        selectedChoice === choice
+                          ? colorScheme === 'dark'
+                            ? '#4a9eff'
+                            : '#2b7de9'
+                          : 'transparent',
+                      borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
+                    },
                   ]}
+                  onPress={() => handleChoice(choice)}
                 >
-                  {choice}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+                  <Text
+                    style={[
+                      styles.choiceText,
+                      selectedChoice === choice && styles.selectedChoiceText,
+                    ]}
+                  >
+                    {choice}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
-        {showingResponse && currentPage.decisionPoint && (
-          <View>
-            <Text style={styles.responseText}>
-              {currentPage.decisionPoint.responses[selectedChoice!]}
-            </Text>
-            <Text style={styles.mainContent}>
-              {currentPage.decisionPoint.remainingContent}
-            </Text>
-          </View>
-        )}
-      </>
-    );
+          {showingResponse && currentSegment.responses && (
+            <View>
+              <Text style={styles.responseText}>
+                {currentSegment.responses[selectedChoice!].replace(
+                  /({characterName}|{YN})/g,
+                  characterName
+                )}
+              </Text>
+            </View>
+          )}
+        </>
+      );
+    }
+
+    return null;
   };
+
+  if (isLoading) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color={colorScheme === 'dark' ? '#4a9eff' : '#2b7de9'} />
+      </View>
+    );
+  }
+
+  if (error || !story) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.errorText}>Failed to load story content</Text>
+      </View>
+    );
+  }
 
   return (
     <>
       <Stack.Screen
         options={{
           title: story.title,
-          headerBackTitle: 'Stories',
+          headerBackTitle: 'Home',
         }}
       />
-      <View style={{ flex: 1, backgroundColor: '#fff', padding: 20 }}>
-        <ScrollView>
-          {renderContent()}
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.contentContainer}
+        >
+          <Animated.View
+            style={[
+              styles.contentWrapper,
+              {
+                opacity: fadeAnim,
+                transform: [{ translateY: slideAnim }],
+              },
+            ]}
+          >
+            {renderContent()}
+          </Animated.View>
         </ScrollView>
 
-        <View style={styles.navigationContainer}>
-          <TouchableOpacity
-            style={[
-              styles.navButton,
-              isFirstPage && styles.disabledButton,
-              { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' },
-            ]}
-            onPress={handlePreviousPage}
-            disabled={isFirstPage}
-          >
-            <MaterialIcons
-              name="arrow-back"
-              size={24}
-              color={
-                isFirstPage
-                  ? '#666'
-                  : colorScheme === 'dark'
-                  ? '#4a9eff'
-                  : '#2b7de9'
-              }
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.navButton,
-              isLastPage && styles.disabledButton,
-              { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' },
-            ]}
-            onPress={handleNextPage}
-            disabled={isLastPage}
-          >
-            <MaterialIcons
-              name="arrow-forward"
-              size={24}
-              color={
-                isLastPage
-                  ? '#666'
-                  : colorScheme === 'dark'
-                  ? '#4a9eff'
-                  : '#2b7de9'
-              }
-            />
-          </TouchableOpacity>
+        <View style={[
+          styles.navigationContainer,
+          isFirstPage && styles.firstPageNavigationContainer
+        ]}>
+          {isFirstPage ? (
+            <TouchableOpacity
+              style={[
+                styles.startButton,
+                { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' },
+              ]}
+              onPress={handleNextSegment}
+            >
+              <Text style={styles.startButtonText}>Begin</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={[
+                  styles.navButton,
+                  { backgroundColor: colorScheme === 'dark' ? '#333' : '#e0e0e0' },
+                ]}
+                onPress={handlePreviousSegment}
+                disabled={currentChapterIndex === 0 && currentSegmentIndex === 0}
+              >
+                <MaterialIcons
+                  name="arrow-back"
+                  size={24}
+                  color={
+                    currentChapterIndex === 0 && currentSegmentIndex === 0
+                      ? '#999'
+                      : colorScheme === 'dark'
+                      ? '#fff'
+                      : '#333'
+                  }
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.navButton,
+                  { backgroundColor: colorScheme === 'dark' ? '#333' : '#e0e0e0' },
+                ]}
+                onPress={handleNextSegment}
+                disabled={
+                  currentSegment?.type === 'decisionPoint' && !selectedChoice
+                }
+              >
+                <MaterialIcons
+                  name="arrow-forward"
+                  size={24}
+                  color={
+                    currentSegment?.type === 'decisionPoint' && !selectedChoice
+                      ? '#999'
+                      : colorScheme === 'dark'
+                      ? '#fff'
+                      : '#333'
+                  }
+                />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
     </>
@@ -576,5 +627,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'red',
     textAlign: 'center',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  contentContainer: {
+    padding: 20,
+  },
+  contentWrapper: {
+    flex: 1,
+  },
+  startButton: {
+    width: 200,
+    height: 60,
+    borderWidth: 0,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  startButtonText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  firstPageNavigationContainer: {
+    justifyContent: 'center',
   },
 }); 
