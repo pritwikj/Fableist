@@ -51,12 +51,16 @@ export async function createUserDocument(user: User): Promise<void> {
     const userDoc = await getDoc(userRef);
     
     if (!userDoc.exists()) {
+      // Get current date in YYYY-MM-DD format
+      const today = new Date();
+      const joinDate = today.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+      
       // Create new user document with default fields
       const userData = {
         coins: 20, // Default starting coins
         displayName: user.displayName || user.email?.split('@')[0] || 'User',
         email: user.email,
-        joinDate: serverTimestamp(),
+        joinDate: joinDate,
       };
       
       await setDoc(userRef, userData);

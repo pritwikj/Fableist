@@ -63,23 +63,29 @@ export default function ProfileScreen() {
     }
   };
 
-  // Format date from string (YYYY-MM-DD) to a more readable format
-  const formatDate = (dateStr: string | undefined) => {
-    if (!dateStr) return 'N/A';
+  // Format date from string (YYYY-MM-DD) or Firestore Timestamp
+  const formatDate = (date: any) => {
+    if (!date) return 'N/A';
     
     try {
-      // Append 'T12:00:00' to ensure it's interpreted as noon in local timezone
-      const date = new Date(`${dateStr}T12:00:00`);
-      
-      if (isNaN(date.getTime())) {
-        return 'Invalid date';
+      // Handle Firestore Timestamp objects
+      if (date && typeof date === 'object' && date.toDate && typeof date.toDate === 'function') {
+        const jsDate = date.toDate();
+        return jsDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
       }
       
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
+      // If the date is already in YYYY-MM-DD format, just return it
+      if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return date;
+      }
+      
+      // Try to parse as a date string
+      const parsedDate = new Date(date);
+      if (!isNaN(parsedDate.getTime())) {
+        return parsedDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+      }
+      
+      return 'Invalid date';
     } catch (error) {
       console.error('Error formatting date:', error);
       return 'Invalid date';
