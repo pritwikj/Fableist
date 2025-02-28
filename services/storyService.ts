@@ -1,7 +1,7 @@
 /**
  * Story Service
  * 
- * Centralizes story fetching logic and provides consistent interfaces for
+ * Centralizes storyy fetching logic and provides consistent interfaces for
  * accessing story data throughout the application.
  */
 
