@@ -46,7 +46,7 @@ export default function LibraryScreen() {
     setRefreshing(false);
   }, [refetch]);
 
-  // Navigate to the story reader at the specific page
+  // Navigate to the story reader at the specific chapter
   const handleStoryPress = (item: LibraryItem) => {
     if (!item.story) {
       // Handle the case where story metadata isn't available
@@ -55,16 +55,16 @@ export default function LibraryScreen() {
     }
     
     try {
-      // Navigate directly to the story reader with the story ID and current page
-      // Make sure the currentPage is passed as a string for the router
+      // Navigate directly to the story reader with the story ID and current chapter
+      // Make sure the currentChapter is passed as a string for the router
       router.push({
         pathname: `/[id]` as const,
         params: { 
           id: item.storyId, 
-          currentPageIndex: item.currentPage 
+          initialChapter: item.currentChapter 
         }
       });
-      console.log(`Navigating to story ${item.storyId} at page ${item.currentPage}`);
+      console.log(`Navigating to story ${item.storyId} at chapter ${item.currentChapter}`);
     } catch (error) {
       console.error('Navigation error:', error);
       Alert.alert(
@@ -106,7 +106,10 @@ export default function LibraryScreen() {
         />
         <View style={styles.cardContent}>
           <Text style={styles.title}>{item.story.title}</Text>
-          <Text style={styles.subtitle}>Page {item.currentPage}</Text>
+          <Text style={styles.subtitle}>Chapter {typeof item.currentChapter === 'number' 
+            ? item.currentChapter + 1 
+            : parseInt(item.currentChapter as string) + 1}
+          </Text>
         </View>
       </TouchableOpacity>
     );

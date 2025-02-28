@@ -24,7 +24,7 @@ export interface StoryMetadata {
  */
 export interface UserStoryProgress {
   storyId: string;
-  currentPage: string;
+  currentChapter: number | string; // Can be number or string for backward compatibility
   lastReadTimestamp: Timestamp;
 }
 
@@ -32,7 +32,7 @@ export interface UserStoryProgress {
  * Represents a story in the user's library with reading progress and metadata
  */
 export interface LibraryStory extends StoryMetadata {
-  currentPage: string;
+  currentChapter: number | string; // Can be number or string for backward compatibility
   lastReadTimestamp: Timestamp;
 }
 
@@ -175,7 +175,10 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
       const data = doc.data() as UserStoryProgress;
       return {
         storyId: data.storyId || doc.id, // Use document ID as a fallback if storyId field is missing
-        currentPage: data.currentPage || "1",
+        // Handle both legacy currentPage field and new currentChapter field
+        currentChapter: data.currentChapter || "0",
+        // For backward compatibility, if only currentPage exists but no currentChapter
+        ...(data.hasOwnProperty('currentPage') && !data.hasOwnProperty('currentChapter') && { currentChapter: "0" }),
         lastReadTimestamp: data.lastReadTimestamp || Timestamp.now(),
         docId: doc.id
       };
@@ -191,7 +194,7 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
           // Combine metadata with reading progress
           return {
             ...metadata,
-            currentPage: progress.currentPage,
+            currentChapter: progress.currentChapter,
             lastReadTimestamp: progress.lastReadTimestamp,
           };
         } catch (error) {
@@ -206,7 +209,7 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
             coverImage: "https://via.placeholder.com/150",
             description: "Story details unavailable",
             defaultCharacterName: "Reader",
-            currentPage: progress.currentPage,
+            currentChapter: progress.currentChapter,
             lastReadTimestamp: progress.lastReadTimestamp,
           };
         }
@@ -224,12 +227,12 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
 /**
  * Updates the user's reading progress for a specific story
  * @param storyId ID of the story being read
- * @param currentPage Current page identifier
+ * @param currentChapter Current chapter index as a number or string
  * @returns Promise resolving to success/failure status
  */
 export async function updateReadingProgress(
   storyId: string, 
-  currentPage: string
+  currentChapter: number | string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Check if user is authenticated
@@ -249,12 +252,14 @@ export async function updateReadingProgress(
     }
 
     const userId = getCurrentUser()!.uid;
-    console.log(`Updating reading progress for user ${userId}, story ${storyId}, page ${currentPage}`);
+    console.log(`Updating reading progress for user ${userId}, story ${storyId}, chapter ${currentChapter}`);
     
-    // Create progress data
+    // Create progress data - store currentChapter as a number if it's a number or can be parsed as one
+    const numericChapter = typeof currentChapter === 'string' ? parseInt(currentChapter, 10) : currentChapter;
+    
     const progressData: UserStoryProgress = {
       storyId,
-      currentPage,
+      currentChapter: !isNaN(numericChapter) ? numericChapter : 0, // Store as number if valid
       lastReadTimestamp: Timestamp.now()
     };
 

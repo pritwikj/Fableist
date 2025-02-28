@@ -38,7 +38,7 @@ import { fetchStoryContent, updateReadingProgress } from '@/services/storyServic
 import { isAuthenticated } from '@/services/firebaseAuth';
 
 export default function StoryReader() {
-  const { id, initialChapter, currentPageIndex: savedPageIndex } = useLocalSearchParams();
+  const { id, initialChapter } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
   const [isFirstPage, setIsFirstPage] = useState(true);
@@ -71,76 +71,34 @@ export default function StoryReader() {
     }
   }, [story]);
 
-  // Handle initial chapter after registration
+  // Handle navigation to saved chapter position from library
   useEffect(() => {
-    if (story && initialChapter && currentChapterIndex === 0 && isFirstPage) {
-      const targetChapter = parseInt(initialChapter as string, 10);
-      if (!isNaN(targetChapter) && targetChapter > 0 && targetChapter < story.chapters.length) {
-        setCurrentChapterIndex(targetChapter);
-        setIsFirstPage(false);
-        loadChapterSegments(targetChapter);
-      }
-    }
-  }, [story, initialChapter]);
-
-  // Handle navigation to saved page position from library
-  useEffect(() => {
-    if (story && savedPageIndex && !isNavigatingToSavedPosition) {
-      const pageIndexToNavigate = parseInt(typeof savedPageIndex === 'string' ? savedPageIndex : Array.isArray(savedPageIndex) ? savedPageIndex[0] : '0', 10);
+    if (story && initialChapter && !isNavigatingToSavedPosition) {
+      const chapterIndexToNavigate = typeof initialChapter === 'number' 
+        ? initialChapter 
+        : parseInt(typeof initialChapter === 'string' ? initialChapter : Array.isArray(initialChapter) ? initialChapter[0] : '0', 10);
       
-      if (!isNaN(pageIndexToNavigate) && pageIndexToNavigate >= 0) {
+      if (!isNaN(chapterIndexToNavigate) && chapterIndexToNavigate >= 0 && chapterIndexToNavigate < story.chapters.length) {
         setIsNavigatingToSavedPosition(true);
+        setCurrentChapterIndex(chapterIndexToNavigate);
         
         // Skip the character name input screen
         if (isFirstPage) {
-          // Calculate which chapter this page belongs to
-          let foundPage = false;
-          let totalSegmentsPassed = 0;
-          
-          for (let i = 0; i < story.chapters.length; i++) {
-            const chapter = story.chapters[i];
-            if (totalSegmentsPassed + chapter.segments.length > pageIndexToNavigate) {
-              // Found the chapter containing our target page
-              setCurrentChapterIndex(i);
-              setIsFirstPage(false);
-              
-              // Load segments up to the saved position
-              loadChapterSegments(i, pageIndexToNavigate - totalSegmentsPassed);
-              
-              foundPage = true;
-              break;
-            }
-            totalSegmentsPassed += chapter.segments.length;
-          }
-          
-          if (!foundPage) {
-            // If we couldn't find the exact page, just go to the first segment
-            setCurrentChapterIndex(0);
-            setIsFirstPage(false);
-            loadChapterSegments(0);
-          }
+          setIsFirstPage(false);
+          loadChapterSegments(chapterIndexToNavigate);
         }
       }
     }
-  }, [story, savedPageIndex, isNavigatingToSavedPosition]);
+  }, [story, initialChapter, isNavigatingToSavedPosition]);
 
-  // Update reading progress when segments change
+  // Update reading progress when chapter changes
   useEffect(() => {
-    if (isAuthenticated() && story && currentChapter && !isFirstPage && storySegments.length > 0) {
-      // Calculate the absolute page index across all chapters
-      let absolutePageIndex = 0;
-      for (let i = 0; i < currentChapterIndex; i++) {
-        absolutePageIndex += story.chapters[i].segments.length;
-      }
-      
-      // Add the number of visible segments
-      absolutePageIndex += storySegments.length;
-      
-      // Update reading progress in Firestore
-      updateReadingProgress(story.id, absolutePageIndex.toString())
+    if (isAuthenticated() && story && currentChapter && !isFirstPage) {
+      // Update reading progress in Firestore with current chapter index as a number
+      updateReadingProgress(story.id, currentChapterIndex)
         .catch(error => console.error('Failed to update reading progress:', error));
     }
-  }, [storySegments, currentChapterIndex, story, isFirstPage]);
+  }, [currentChapterIndex, story, isFirstPage]);
 
   // Configure the navigation header
   useEffect(() => {

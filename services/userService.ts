@@ -28,7 +28,7 @@ import { User } from 'firebase/auth';
 export interface LibraryItem {
   id: string;
   storyId: string;
-  currentPage: string;
+  currentChapter: number | string; // Can be number or string for backward compatibility
   lastReadTimestamp: Timestamp;
   story?: StoryMetadata; // Joined story data
 }
@@ -99,11 +99,19 @@ export async function fetchUserLibrary(): Promise<LibraryItem[]> {
       return [];
     }
     
-    // Get all library items
-    const libraryItems = librarySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    })) as LibraryItem[];
+    // Get all library items, handling both new and legacy data structures
+    const libraryItems = librarySnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        storyId: data.storyId || doc.id,
+        // Handle both legacy 'currentPage' and new 'currentChapter' fields (as number or string)
+        currentChapter: data.currentChapter !== undefined ? data.currentChapter : 0,
+        // For backward compatibility, if only currentPage exists but no currentChapter
+        ...(!data.hasOwnProperty('currentChapter') && { currentChapter: 0 }),
+        lastReadTimestamp: data.lastReadTimestamp || Timestamp.now(),
+      };
+    }) as LibraryItem[];
     
     // Fetch story metadata for each library item
     const itemsWithStories = await Promise.all(
@@ -161,10 +169,10 @@ export async function fetchUserProfile() {
 /**
  * Updates the user's reading progress for a specific story
  * @param storyId The ID of the story being read
- * @param currentPage The current page index the user is on
+ * @param currentChapter The current chapter index the user is on
  * @returns Promise that resolves when the update is complete
  */
-export async function updateUserProgress(storyId: string, currentPage: number): Promise<void> {
+export async function updateUserProgress(storyId: string, currentChapter: number): Promise<void> {
   try {
     const currentUser = getCurrentUser();
     
@@ -180,18 +188,19 @@ export async function updateUserProgress(storyId: string, currentPage: number): 
     
     const libraryItemData = {
       storyId,
-      currentPage: currentPage.toString(),
+      // Store currentChapter directly as a number
+      currentChapter: currentChapter,
       lastReadTimestamp: serverTimestamp(),
     };
     
     if (itemSnapshot.exists()) {
       // Update existing record
       await updateDoc(libraryItemRef, libraryItemData);
-      console.log(`Updated progress for story ${storyId} to page ${currentPage}`);
+      console.log(`Updated progress for story ${storyId} to chapter ${currentChapter}`);
     } else {
       // Create new record
       await setDoc(libraryItemRef, libraryItemData);
-      console.log(`Added story ${storyId} to library at page ${currentPage}`);
+      console.log(`Added story ${storyId} to library at chapter ${currentChapter}`);
     }
   } catch (error: unknown) {
     console.error('Error updating reading progress:', error);
