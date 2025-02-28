@@ -5,7 +5,7 @@
  * - Loading and displaying story content chapter by chapter
  * - Character name input on the first page
  * - Decision points where users can make choices
- * - Navigation between chapters
+ * - Scrollable reading experience with blocked scrolling at decision points
  * - Animated text transitions
  * - Dark/light mode theming
  * - Registration requirement after the first chapter
@@ -14,7 +14,7 @@
  * The first page always prompts for the character's name which is then used throughout the story.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -27,6 +27,8 @@ import {
   Easing,
   Text as RNText,
   View as RNView,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Text, View } from '@/components/Themed';
@@ -39,17 +41,18 @@ export default function StoryReader() {
   const { id, initialChapter, currentPageIndex: savedPageIndex } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
-  const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
+  const [isFirstPage, setIsFirstPage] = useState(true);
   const [characterName, setCharacterName] = useState('');
-  const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
-  const [showingResponse, setShowingResponse] = useState(false);
+  const [storySegments, setStorySegments] = useState<any[]>([]);
+  const [isChapterEnd, setIsChapterEnd] = useState(false);
   const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
   
   // Add animation values
   const fadeAnim = React.useRef(new Animated.Value(1)).current;
   const slideAnim = React.useRef(new Animated.Value(0)).current;
-  const choicesFadeAnim = React.useRef(new Animated.Value(0)).current;
   const responseFadeAnim = React.useRef(new Animated.Value(0)).current;
+  const nextChapterFadeAnim = React.useRef(new Animated.Value(0)).current;
 
   const { data: story, isLoading, error } = useQuery({
     queryKey: ['story-content', id],
@@ -60,8 +63,7 @@ export default function StoryReader() {
 
   // Safe to use in effects since undefined is handled
   const currentChapter = story?.chapters[currentChapterIndex];
-  const currentSegment = currentChapter?.segments[currentSegmentIndex];
-  const isFirstPage = currentSegmentIndex === -1;
+  const hasNextChapter = story && currentChapterIndex < story.chapters.length - 1;
 
   useEffect(() => {
     if (story) {
@@ -69,21 +71,14 @@ export default function StoryReader() {
     }
   }, [story]);
 
-  useEffect(() => {
-    // Show choices if the current segment is a decision point and no choice has been made
-    const shouldShowChoices = currentSegment?.type === 'decisionPoint' && !selectedChoice;
-    if (shouldShowChoices) {
-      showChoices();
-    }
-  }, [currentChapterIndex, currentSegmentIndex, currentSegment, selectedChoice]);
-
   // Handle initial chapter after registration
   useEffect(() => {
-    if (story && initialChapter && currentChapterIndex === 0) {
+    if (story && initialChapter && currentChapterIndex === 0 && isFirstPage) {
       const targetChapter = parseInt(initialChapter as string, 10);
       if (!isNaN(targetChapter) && targetChapter > 0 && targetChapter < story.chapters.length) {
         setCurrentChapterIndex(targetChapter);
-        setCurrentSegmentIndex(0);
+        setIsFirstPage(false);
+        loadChapterSegments(targetChapter);
       }
     }
   }, [story, initialChapter]);
@@ -96,51 +91,56 @@ export default function StoryReader() {
       if (!isNaN(pageIndexToNavigate) && pageIndexToNavigate >= 0) {
         setIsNavigatingToSavedPosition(true);
         
-        // Skip the character name input screen if we're navigating to a saved position
-        if (currentSegmentIndex === -1) {
-          setCurrentSegmentIndex(0);
-        }
-        
-        // Calculate which chapter this page belongs to
-        let foundPage = false;
-        let totalSegmentsPassed = 0;
-        
-        for (let i = 0; i < story.chapters.length; i++) {
-          const chapter = story.chapters[i];
-          if (totalSegmentsPassed + chapter.segments.length > pageIndexToNavigate) {
-            // Found the chapter containing our target page
-            setCurrentChapterIndex(i);
-            setCurrentSegmentIndex(pageIndexToNavigate - totalSegmentsPassed);
-            foundPage = true;
-            break;
+        // Skip the character name input screen
+        if (isFirstPage) {
+          // Calculate which chapter this page belongs to
+          let foundPage = false;
+          let totalSegmentsPassed = 0;
+          
+          for (let i = 0; i < story.chapters.length; i++) {
+            const chapter = story.chapters[i];
+            if (totalSegmentsPassed + chapter.segments.length > pageIndexToNavigate) {
+              // Found the chapter containing our target page
+              setCurrentChapterIndex(i);
+              setIsFirstPage(false);
+              
+              // Load segments up to the saved position
+              loadChapterSegments(i, pageIndexToNavigate - totalSegmentsPassed);
+              
+              foundPage = true;
+              break;
+            }
+            totalSegmentsPassed += chapter.segments.length;
           }
-          totalSegmentsPassed += chapter.segments.length;
-        }
-        
-        if (!foundPage) {
-          // If we couldn't find the exact page, just go to the first segment
-          setCurrentChapterIndex(0);
-          setCurrentSegmentIndex(0);
+          
+          if (!foundPage) {
+            // If we couldn't find the exact page, just go to the first segment
+            setCurrentChapterIndex(0);
+            setIsFirstPage(false);
+            loadChapterSegments(0);
+          }
         }
       }
     }
   }, [story, savedPageIndex, isNavigatingToSavedPosition]);
 
-  // Update reading progress when page changes
+  // Update reading progress when segments change
   useEffect(() => {
-    if (isAuthenticated() && story && currentChapter && !isFirstPage) {
+    if (isAuthenticated() && story && currentChapter && !isFirstPage && storySegments.length > 0) {
       // Calculate the absolute page index across all chapters
       let absolutePageIndex = 0;
       for (let i = 0; i < currentChapterIndex; i++) {
         absolutePageIndex += story.chapters[i].segments.length;
       }
-      absolutePageIndex += currentSegmentIndex;
+      
+      // Add the number of visible segments
+      absolutePageIndex += storySegments.length;
       
       // Update reading progress in Firestore
       updateReadingProgress(story.id, absolutePageIndex.toString())
         .catch(error => console.error('Failed to update reading progress:', error));
     }
-  }, [currentChapterIndex, currentSegmentIndex, story, isFirstPage]);
+  }, [storySegments, currentChapterIndex, story, isFirstPage]);
 
   // Configure the navigation header
   useEffect(() => {
@@ -150,6 +150,82 @@ export default function StoryReader() {
       });
     }
   }, [story?.title]);
+
+  const loadChapterSegments = (chapterIndex: number, maxSegmentIndex?: number) => {
+    if (!story || !story.chapters[chapterIndex]) return;
+    
+    const chapter = story.chapters[chapterIndex];
+    const segments = [];
+    
+    // Determine how many segments to load
+    let endIndex = maxSegmentIndex !== undefined 
+      ? maxSegmentIndex 
+      : chapter.segments.length;
+    
+    // If no max index specified, load segments until we hit a decision point or the end
+    if (maxSegmentIndex === undefined) {
+      for (let i = 0; i < chapter.segments.length; i++) {
+        segments.push({
+          ...chapter.segments[i],
+          index: i
+        });
+        
+        // Stop if we hit a decision point
+        if (chapter.segments[i].type === 'decisionPoint') {
+          endIndex = i;
+          break;
+        }
+      }
+    } else {
+      // Load up to the specified max index
+      for (let i = 0; i <= endIndex; i++) {
+        segments.push({
+          ...chapter.segments[i],
+          index: i
+        });
+      }
+    }
+    
+    setStorySegments(segments);
+    
+    // Check if we're at the end of the chapter
+    if (endIndex === chapter.segments.length - 1) {
+      setIsChapterEnd(true);
+      // Show the "Next Chapter" indicator with animation
+      setTimeout(() => {
+        Animated.timing(nextChapterFadeAnim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }).start();
+      }, 500);
+    } else {
+      setIsChapterEnd(false);
+      nextChapterFadeAnim.setValue(0);
+    }
+  };
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    // Check if we've scrolled to the bottom
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const paddingToBottom = 20;
+    const isScrolledToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    
+    // If we're at the end of a chapter and scrolled to the bottom, load the next chapter
+    if (isScrolledToBottom && isChapterEnd && hasNextChapter) {
+      const nextChapterIndex = currentChapterIndex + 1;
+      setCurrentChapterIndex(nextChapterIndex);
+      
+      // Load segments from the next chapter with animation
+      animateContentChange(() => {
+        setIsChapterEnd(false);
+        loadChapterSegments(nextChapterIndex);
+        
+        // Scroll to the top for the new chapter
+        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      });
+    }
+  };
 
   const animateContentChange = (callback?: () => void) => {
     // Fade out current content
@@ -170,6 +246,7 @@ export default function StoryReader() {
       
       // Reset animation values
       slideAnim.setValue(50);
+      nextChapterFadeAnim.setValue(0);
       
       // Fade in new content
       Animated.parallel([
@@ -188,249 +265,226 @@ export default function StoryReader() {
     });
   };
 
-  const showChoices = () => {
-    Animated.timing(choicesFadeAnim, {
-      toValue: 1,
-      duration: 500,
-      delay: 500,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const showResponse = () => {
+  const handleChoice = (segment: any, choice: string) => {
+    // Update the segment with the selected choice
+    const updatedSegments = storySegments.map(s => {
+      if (s.index === segment.index) {
+        return {
+          ...s,
+          selectedChoice: choice,
+          showResponse: true
+        };
+      }
+      return s;
+    });
+    
+    setStorySegments(updatedSegments);
+    
+    // Show the response with animation
     Animated.timing(responseFadeAnim, {
       toValue: 1,
       duration: 500,
       useNativeDriver: true,
     }).start();
-  };
-
-  const handleNextSegment = () => {
-    if (!story || !currentChapter) return;
     
-    // First page validation - require character name
-    if (isFirstPage) {
-      if (!characterName.trim()) {
-        Alert.alert('Name Required', 'Please enter a name before continuing.');
-        return;
-      }
-      
-      // Move from name input screen to first actual segment
-      animateContentChange(() => {
-        setCurrentSegmentIndex(0); // Start at the first segment (index 0)
-      });
-      return;
-    }
-    
-    // If we're at a decision point and haven't made a choice yet, don't proceed
-    if (currentSegment?.type === 'decisionPoint' && !selectedChoice) {
-      Alert.alert('Make a choice', 'Please select one of the options to continue.');
-      return;
-    }
-    
-    // Check if we're at the end of the first chapter and user is not authenticated
-    if (currentChapterIndex === 0 && 
-        currentSegmentIndex === currentChapter.segments.length - 1 && 
-        !isAuthenticated()) {
-      Alert.alert(
-        'Sign Up Required',
-        'To continue reading further chapters, please register for an account.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Register', 
-            onPress: () => router.push({
-              pathname: '/register',
-              params: { 
-                returnTo: `/${id}`,
-                returnToChapter: '1'  // We want to return to chapter 1 (index 1)
-              }
-            })
+    // After a brief delay, load the next segments
+    setTimeout(() => {
+      if (currentChapter) {
+        const lastSegmentIndex = segment.index;
+        
+        // Check if there are more segments in the chapter
+        if (lastSegmentIndex < currentChapter.segments.length - 1) {
+          // Load segments until the next decision point or end of chapter
+          const nextSegments = [...updatedSegments];
+          let foundNextDecisionPoint = false;
+          
+          for (let i = lastSegmentIndex + 1; i < currentChapter.segments.length; i++) {
+            const nextSegment = {
+              ...currentChapter.segments[i],
+              index: i
+            };
+            
+            nextSegments.push(nextSegment);
+            
+            // Stop if we hit another decision point
+            if (nextSegment.type === 'decisionPoint') {
+              foundNextDecisionPoint = true;
+              break;
+            }
           }
-        ]
-      );
-      return;
-    }
-    
-    animateContentChange(() => {
-      // Reset choice state
-      setSelectedChoice(null);
-      setShowingResponse(false);
-      
-      // Reset animation values
-      choicesFadeAnim.setValue(0);
-      responseFadeAnim.setValue(0);
-      
-      // Check if we're at the end of the current chapter
-      if (currentSegmentIndex >= currentChapter.segments.length - 1) {
-        // Check if we're at the last chapter
-        if (currentChapterIndex >= story.chapters.length - 1) {
-          // We're at the end of the story
-          Alert.alert(
-            'End of Story',
-            'You have reached the end of this story.',
-            [
-              {
-                text: 'Return to Home',
-                onPress: () => router.push('/'),
-              },
-            ]
-          );
-          return;
+          
+          // Check if we're at the end of the chapter
+          if (nextSegments[nextSegments.length - 1].index === currentChapter.segments.length - 1) {
+            setIsChapterEnd(true);
+            // Show the "Next Chapter" indicator with animation
+            setTimeout(() => {
+              Animated.timing(nextChapterFadeAnim, {
+                toValue: 1,
+                duration: 800,
+                useNativeDriver: true,
+              }).start();
+            }, 500);
+          }
+          
+          setStorySegments(nextSegments);
+          
+          // Scroll down a bit to show new content
+          if (foundNextDecisionPoint) {
+            setTimeout(() => {
+              scrollViewRef.current?.scrollToEnd({ animated: true });
+            }, 300);
+          }
+        } else {
+          // We're at the end of the chapter, show the "next chapter" indicator
+          setIsChapterEnd(true);
+          
+          // Show the "Next Chapter" indicator with animation
+          setTimeout(() => {
+            Animated.timing(nextChapterFadeAnim, {
+              toValue: 1,
+              duration: 800,
+              useNativeDriver: true,
+            }).start();
+          }, 500);
         }
-        
-        // Move to the next chapter
-        setCurrentChapterIndex(currentChapterIndex + 1);
-        setCurrentSegmentIndex(0);
-      } else {
-        // Move to the next segment in the current chapter
-        setCurrentSegmentIndex(currentSegmentIndex + 1);
       }
-    });
+    }, 500);
   };
 
-  const handlePreviousSegment = () => {
-    if (!story || !currentChapter) return;
-    
-    // Don't allow going back from the first segment of the first chapter
-    if (currentChapterIndex === 0 && currentSegmentIndex <= 0) {
+  const handleStartReading = () => {
+    if (!characterName.trim()) {
+      Alert.alert('Name Required', 'Please enter a name before continuing.');
       return;
     }
     
+    // Move from name input screen to first actual segment
     animateContentChange(() => {
-      // Reset choice state
-      setSelectedChoice(null);
-      setShowingResponse(false);
-      
-      // Reset animation values
-      choicesFadeAnim.setValue(0);
-      responseFadeAnim.setValue(0);
-      
-      // Check if we're at the beginning of the current chapter
-      if (currentSegmentIndex <= 0) {
-        // Move to the previous chapter
-        const previousChapterIndex = currentChapterIndex - 1;
-        const previousChapter = story.chapters[previousChapterIndex];
-        
-        setCurrentChapterIndex(previousChapterIndex);
-        setCurrentSegmentIndex(previousChapter.segments.length - 1);
-      } else {
-        // Move to the previous segment in the current chapter
-        setCurrentSegmentIndex(currentSegmentIndex - 1);
-      }
+      setIsFirstPage(false);
+      loadChapterSegments(currentChapterIndex);
     });
   };
 
-  const handleChoice = (choice: string) => {
-    setSelectedChoice(choice);
-    setShowingResponse(true);
-    showResponse();
+  const renderFirstPage = () => {
+    return (
+      <View style={styles.firstPageContainer}>
+        <Text style={styles.storyTitle}>
+          Welcome to {story?.title}
+        </Text>
+        <Text style={styles.namePrompt}>
+          Before we begin your adventure, what shall we call you?
+        </Text>
+        <TextInput
+          style={[
+            styles.nameInput,
+            { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+          ]}
+          value={characterName}
+          onChangeText={setCharacterName}
+          placeholder="Enter your name"
+          placeholderTextColor="#666"
+        />
+        <TouchableOpacity
+          style={[
+            styles.startButton,
+            { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+          ]}
+          onPress={handleStartReading}
+        >
+          <Text style={styles.startButtonText}>Begin</Text>
+        </TouchableOpacity>
+      </View>
+    );
   };
 
-  const renderContent = () => {
-    if (isFirstPage) {
-      return (
-        <View style={styles.firstPageContainer}>
-          <Text style={styles.storyTitle}>
-            Welcome to {story?.title}
-          </Text>
-          <Text style={styles.namePrompt}>
-            Before we begin your adventure, what shall we call you?
-          </Text>
-          <TextInput
-            style={[
-              styles.nameInput,
-              { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
-            ]}
-            value={characterName}
-            onChangeText={setCharacterName}
-            placeholder="Enter your name"
-            placeholderTextColor="#666"
-          />
-        </View>
-      );
-    }
+  const renderNextChapterIndicator = () => {
+    if (!isChapterEnd || !hasNextChapter) return null;
+    
+    return (
+      <Animated.View 
+        style={[
+          styles.nextChapterContainer,
+          { opacity: nextChapterFadeAnim }
+        ]}
+      >
+        <RNText style={styles.nextChapterText}>
+          {story?.chapters[currentChapterIndex + 1]?.title}
+        </RNText>
+        <MaterialIcons 
+          name="keyboard-arrow-down" 
+          size={32} 
+          color={colorScheme === 'dark' ? '#4a9eff' : '#2b7de9'} 
+        />
+        <RNText style={styles.nextChapterInstructions}>
+          Scroll down to continue
+        </RNText>
+      </Animated.View>
+    );
+  };
 
-    if (!currentChapter || !currentSegment) {
-      return (
-        <Text style={styles.errorText}>
-          Error: Could not load chapter or segment content
-        </Text>
-      );
-    }
-
-    if (currentSegment.type === 'text') {
-      const processedContent = currentSegment.content?.replace(
+  const renderSegment = (segment: any) => {
+    if (segment.type === 'text') {
+      const processedContent = segment.content?.replace(
         /({characterName}|{YN})/g,
         characterName
       ) || '';
 
       return (
-        <>
-          <Text style={styles.chapterTitle}>
-            {currentChapter.title}
-          </Text>
+        <RNView key={`text-${segment.index}`} style={styles.textSegment}>
           <RNText style={{
             fontSize: 18,
-            marginBottom: 20,
             color: colorScheme === 'dark' ? '#fff' : '#000'
           }}>
             {processedContent}
           </RNText>
-        </>
+        </RNView>
       );
     }
 
-    if (currentSegment.type === 'decisionPoint') {
+    if (segment.type === 'decisionPoint') {
+      const hasSelectedChoice = segment.selectedChoice;
+      
       return (
-        <>
-          <Text style={styles.chapterTitle}>
-            {currentChapter.title}
-          </Text>
-          
-          {!showingResponse && (
-            <View style={styles.decisionContainer}>
-              {currentSegment.choices?.map((choice) => (
+        <RNView key={`decision-${segment.index}`} style={styles.decisionContainer}>
+          {/* Decision choices */}
+          {!hasSelectedChoice && (
+            <RNView style={styles.choicesContainer}>
+              {segment.choices?.map((choice: string) => (
                 <TouchableOpacity
                   key={choice}
                   style={[
                     styles.choiceButton,
                     {
-                      backgroundColor:
-                        selectedChoice === choice
-                          ? colorScheme === 'dark'
-                            ? '#4a9eff'
-                            : '#2b7de9'
-                          : 'transparent',
+                      backgroundColor: 'transparent',
                       borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
                     },
                   ]}
-                  onPress={() => handleChoice(choice)}
+                  onPress={() => handleChoice(segment, choice)}
                 >
-                  <Text
-                    style={[
-                      styles.choiceText,
-                      selectedChoice === choice && styles.selectedChoiceText,
-                    ]}
-                  >
+                  <Text style={styles.choiceText}>
                     {choice}
                   </Text>
                 </TouchableOpacity>
               ))}
-            </View>
+            </RNView>
           )}
 
-          {showingResponse && currentSegment.responses && (
-            <View>
+          {/* Response after selection */}
+          {hasSelectedChoice && segment.responses && (
+            <Animated.View 
+              style={{ 
+                opacity: responseFadeAnim,
+                marginVertical: 10
+              }}
+            >
               <Text style={styles.responseText}>
-                {currentSegment.responses[selectedChoice!].replace(
+                {segment.responses[segment.selectedChoice].replace(
                   /({characterName}|{YN})/g,
                   characterName
                 )}
               </Text>
-            </View>
+            </Animated.View>
           )}
-        </>
+        </RNView>
       );
     }
 
@@ -462,84 +516,37 @@ export default function StoryReader() {
         }}
       />
       <View style={styles.container}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.contentContainer}
-        >
-          <Animated.View
-            style={[
-              styles.contentWrapper,
-              {
-                opacity: fadeAnim,
-                transform: [{ translateY: slideAnim }],
-              },
-            ]}
+        {isFirstPage ? (
+          // Render character name input screen
+          renderFirstPage()
+        ) : (
+          // Render scrollable story content
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.scrollView}
+            contentContainerStyle={styles.contentContainer}
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
           >
-            {renderContent()}
-          </Animated.View>
-        </ScrollView>
-
-        <View style={[
-          styles.navigationContainer,
-          isFirstPage && styles.firstPageNavigationContainer
-        ]}>
-          {isFirstPage ? (
-            <TouchableOpacity
+            <Text style={styles.chapterTitle}>
+              {currentChapter?.title}
+            </Text>
+            
+            <Animated.View
               style={[
-                styles.startButton,
-                { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' },
+                styles.contentWrapper,
+                {
+                  opacity: fadeAnim,
+                  transform: [{ translateY: slideAnim }],
+                },
               ]}
-              onPress={handleNextSegment}
             >
-              <Text style={styles.startButtonText}>Begin</Text>
-            </TouchableOpacity>
-          ) : (
-            <>
-              <TouchableOpacity
-                style={[
-                  styles.navButton,
-                  { backgroundColor: colorScheme === 'dark' ? '#333' : '#e0e0e0' },
-                ]}
-                onPress={handlePreviousSegment}
-                disabled={currentChapterIndex === 0 && currentSegmentIndex === 0}
-              >
-                <MaterialIcons
-                  name="arrow-back"
-                  size={24}
-                  color={
-                    currentChapterIndex === 0 && currentSegmentIndex === 0
-                      ? '#999'
-                      : colorScheme === 'dark'
-                      ? '#fff'
-                      : '#333'
-                  }
-                />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.navButton,
-                  { backgroundColor: colorScheme === 'dark' ? '#333' : '#e0e0e0' },
-                ]}
-                onPress={handleNextSegment}
-                disabled={
-                  currentSegment?.type === 'decisionPoint' && !selectedChoice
-                }
-              >
-                <MaterialIcons
-                  name="arrow-forward"
-                  size={24}
-                  color={
-                    currentSegment?.type === 'decisionPoint' && !selectedChoice
-                      ? '#999'
-                      : colorScheme === 'dark'
-                      ? '#fff'
-                      : '#333'
-                  }
-                />
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
+              {storySegments.map(segment => renderSegment(segment))}
+            </Animated.View>
+            
+            {renderNextChapterIndicator()}
+          </ScrollView>
+        )}
       </View>
     </>
   );
@@ -548,13 +555,12 @@ export default function StoryReader() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   firstPageContainer: {
     flex: 1,
     padding: 20,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   storyTitle: {
     fontSize: 24,
@@ -566,7 +572,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 16,
-    color: '#333',
   },
   namePrompt: {
     fontSize: 18,
@@ -581,8 +586,14 @@ const styles = StyleSheet.create({
     fontSize: 18,
     marginBottom: 20,
   },
+  textSegment: {
+    marginBottom: 20,
+  },
   decisionContainer: {
     marginVertical: 20,
+  },
+  choicesContainer: {
+    marginVertical: 10,
   },
   choiceButton: {
     borderWidth: 2,
@@ -603,36 +614,30 @@ const styles = StyleSheet.create({
     marginVertical: 10,
     color: '#666',
   },
-  mainContent: {
-    fontSize: 16,
-    marginTop: 10,
-  },
-  navigationContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 20,
-  },
-  navButton: {
-    width: 50,
-    height: 50,
-    borderWidth: 2,
-    borderRadius: 25,
-    justifyContent: 'center',
+  nextChapterContainer: {
     alignItems: 'center',
+    paddingVertical: 30,
+    marginTop: 20,
   },
-  disabledButton: {
-    opacity: 0.5,
-  },
-  errorText: {
-    fontSize: 16,
-    color: 'red',
+  nextChapterText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 15,
     textAlign: 'center',
+    color: '#666',
+  },
+  nextChapterInstructions: {
+    fontSize: 14,
+    marginTop: 5,
+    color: '#666',
+    fontStyle: 'italic',
   },
   scrollView: {
     flex: 1,
   },
   contentContainer: {
     padding: 20,
+    paddingBottom: 40,
   },
   contentWrapper: {
     flex: 1,
@@ -656,7 +661,10 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: 'white',
   },
-  firstPageNavigationContainer: {
-    justifyContent: 'center',
+  errorText: {
+    fontSize: 16,
+    color: 'red',
+    textAlign: 'center',
+    margin: 24,
   },
 }); 
