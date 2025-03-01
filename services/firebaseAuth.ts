@@ -7,10 +7,9 @@ import {
   User,
   AuthError,
   initializeAuth,
-  Auth
+  Auth,
+  getReactNativePersistence
 } from 'firebase/auth';
-// import { getReactNativePersistence } from 'firebase/auth';
-import { getReactNativePersistence } from 'firebase/auth/react-native';
 import { FirebaseApp } from 'firebase/app';
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import { maybeCompleteAuthSession } from 'expo-web-browser';
