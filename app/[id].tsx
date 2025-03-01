@@ -46,6 +46,7 @@ export default function StoryReader() {
   const [storySegments, setStorySegments] = useState<any[]>([]);
   const [isChapterEnd, setIsChapterEnd] = useState(false);
   const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   
   // Add animation values
@@ -64,6 +65,7 @@ export default function StoryReader() {
   // Safe to use in effects since undefined is handled
   const currentChapter = story?.chapters[currentChapterIndex];
   const hasNextChapter = story && currentChapterIndex < story.chapters.length - 1;
+  const hasPreviousChapter = story && currentChapterIndex > 0;
 
   useEffect(() => {
     if (story) {
@@ -164,10 +166,17 @@ export default function StoryReader() {
   };
 
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    // Check if we've scrolled to the bottom
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    
+    // Don't process scroll events during animations
+    if (isAnimating) return;
+    
+    // Check if we've scrolled to the bottom
     const paddingToBottom = 20;
     const isScrolledToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    
+    // Check if we've scrolled to the top (for scrolling to previous chapter)
+    const isScrolledToTop = contentOffset.y <= 0;
     
     // If we're at the end of a chapter and scrolled to the bottom, load the next chapter
     if (isScrolledToBottom && isChapterEnd && hasNextChapter) {
@@ -183,43 +192,92 @@ export default function StoryReader() {
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
       });
     }
+    
+    // If we're at the beginning of a chapter and scrolled to the top, load the previous chapter
+    else if (isScrolledToTop && hasPreviousChapter) {
+      // Store the scroll position to detect continuous scrolling attempts
+      const prevChapterIndex = currentChapterIndex - 1;
+      
+      setCurrentChapterIndex(prevChapterIndex);
+      
+      // Load segments from the previous chapter with animation
+      animateContentChange(() => {
+        setIsChapterEnd(true); // Set to true since we're loading a complete chapter
+        loadChapterSegments(prevChapterIndex);
+        
+        // Scroll to the bottom of the previous chapter to position correctly
+        setTimeout(() => {
+          scrollViewRef.current?.scrollToEnd({ animated: false });
+        }, 100);
+      });
+    }
+  };
+
+  const handlePreviousChapter = () => {
+    if (hasPreviousChapter) {
+      const prevChapterIndex = currentChapterIndex - 1;
+      setCurrentChapterIndex(prevChapterIndex);
+      
+      // Load segments from the previous chapter with animation
+      animateContentChange(() => {
+        setIsChapterEnd(true); // Set to true since we're loading a complete chapter
+        loadChapterSegments(prevChapterIndex);
+        
+        // Scroll to the top for the new chapter
+        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      });
+    }
+  };
+
+  const handleNextChapter = () => {
+    if (hasNextChapter) {
+      const nextChapterIndex = currentChapterIndex + 1;
+      setCurrentChapterIndex(nextChapterIndex);
+      
+      // Load segments from the next chapter with animation
+      animateContentChange(() => {
+        setIsChapterEnd(false);
+        loadChapterSegments(nextChapterIndex);
+        
+        // Scroll to the top for the new chapter
+        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      });
+    }
   };
 
   const animateContentChange = (callback?: () => void) => {
-    // Fade out current content
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: -50,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      // Execute callback (page change logic)
+    // Set animating flag to prevent other animations from starting
+    setIsAnimating(true);
+    
+    // Fade out
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+      easing: Easing.out(Easing.ease),
+    }).start(() => {
+      // Execute the callback when faded out
       if (callback) callback();
       
-      // Reset animation values
+      // Reset values for animation
       slideAnim.setValue(50);
-      nextChapterFadeAnim.setValue(0);
       
-      // Fade in new content
+      // Fade in with slide
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 200,
+          duration: 400,
           useNativeDriver: true,
         }),
         Animated.timing(slideAnim, {
           toValue: 0,
-          duration: 200,
-          easing: Easing.out(Easing.cubic),
+          duration: 400,
           useNativeDriver: true,
         }),
-      ]).start();
+      ]).start(() => {
+        // Animation completed, clear animating flag
+        setIsAnimating(false);
+      });
     });
   };
 
@@ -478,7 +536,7 @@ export default function StoryReader() {
           // Render character name input screen
           renderFirstPage()
         ) : (
-          // Render scrollable story content
+          // Render scrollable story content without the navigation bar
           <ScrollView
             ref={scrollViewRef}
             style={styles.scrollView}
