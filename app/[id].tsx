@@ -96,7 +96,8 @@ export default function StoryReader() {
   // Update reading progress when chapter changes
   useEffect(() => {
     if (isAuthenticated() && story && currentChapter && !isFirstPage) {
-      // Update reading progress in Firestore with current chapter index as a number
+      // Update reading progress via Cloud Function to ensure secure database operations
+      // This approach ensures server-side security rules are enforced
       updateReadingProgress(story.id, currentChapterIndex)
         .catch(error => console.error('Failed to update reading progress:', error));
     }

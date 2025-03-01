@@ -23,6 +23,7 @@ import {
 } from 'firebase/firestore';
 import { fetchStoryMetadata, StoryMetadata } from './storyService';
 import { User } from 'firebase/auth';
+import { updateReadingProgressSecure, updateUserCoinsSecure } from './cloudFunctions';
 
 // Types
 export interface LibraryItem {
@@ -174,36 +175,66 @@ export async function fetchUserProfile() {
  */
 export async function updateUserProgress(storyId: string, currentChapter: number): Promise<void> {
   try {
-    const currentUser = getCurrentUser();
-    
-    if (!currentUser) {
-      throw new Error('User not authenticated');
+    // Validate inputs
+    if (!storyId) {
+      throw new Error('Story ID is required');
     }
     
-    const userId = currentUser.uid;
-    const libraryItemRef = doc(db, 'users', userId, 'userLibrary', storyId);
+    // Use Cloud Function to securely update reading progress
+    // This approach ensures server-side security rules are enforced
+    const result = await updateReadingProgressSecure(storyId, currentChapter);
     
-    // Check if the library item exists
-    const itemSnapshot = await getDoc(libraryItemRef);
-    
-    const libraryItemData = {
-      storyId,
-      // Store currentChapter directly as a number
-      currentChapter: currentChapter,
-      lastReadTimestamp: serverTimestamp(),
-    };
-    
-    if (itemSnapshot.exists()) {
-      // Update existing record
-      await updateDoc(libraryItemRef, libraryItemData);
-      console.log(`Updated progress for story ${storyId} to chapter ${currentChapter}`);
-    } else {
-      // Create new record
-      await setDoc(libraryItemRef, libraryItemData);
-      console.log(`Added story ${storyId} to library at chapter ${currentChapter}`);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to update reading progress');
     }
+    
+    console.log(`Successfully updated progress for story ${storyId} to chapter ${currentChapter} via Cloud Function`);
   } catch (error: unknown) {
     console.error('Error updating reading progress:', error);
     throw error;
+  }
+}
+
+/**
+ * Updates the user's coin balance
+ * @param amount Amount of coins to add, subtract, or set
+ * @param operation The operation to perform ('add', 'subtract', or 'set')
+ * @returns Promise resolving to the updated balance information
+ */
+export async function updateUserCoins(
+  amount: number,
+  operation: 'add' | 'subtract' | 'set'
+): Promise<{ 
+  success: boolean; 
+  previousBalance?: number;
+  newBalance?: number;
+  error?: string 
+}> {
+  try {
+    // Validate input
+    if (amount < 0) {
+      return {
+        success: false,
+        error: 'Amount cannot be negative'
+      };
+    }
+    
+    // Use Cloud Function to securely update user coins
+    // This approach ensures server-side security rules are enforced
+    const result = await updateUserCoinsSecure(amount, operation);
+    
+    if (result.success) {
+      console.log(`Successfully updated user coins via Cloud Function: ${operation} ${amount} coins`);
+    } else {
+      console.error(`Failed to update user coins via Cloud Function: ${result.error}`);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error updating user coins:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
   }
 } 

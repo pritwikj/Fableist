@@ -9,6 +9,7 @@ import { Story, Chapter, StorySegment } from '@/types/story';
 import { db } from './firebaseConfig';
 import { collection, doc, getDoc, getDocs, query, where, setDoc, Timestamp, DocumentReference, addDoc, collectionGroup } from 'firebase/firestore';
 import { getCurrentUser, isAuthenticated } from './firebaseAuth';
+import { updateReadingProgressSecure } from './cloudFunctions';
 
 export interface StoryMetadata {
   id: string;
@@ -235,14 +236,6 @@ export async function updateReadingProgress(
   currentChapter: number | string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Check if user is authenticated
-    if (!isAuthenticated() || !getCurrentUser()) {
-      return { 
-        success: false, 
-        error: 'User not authenticated' 
-      };
-    }
-
     // Validate inputs
     if (!storyId) {
       return {
@@ -251,44 +244,17 @@ export async function updateReadingProgress(
       };
     }
 
-    const userId = getCurrentUser()!.uid;
-    console.log(`Updating reading progress for user ${userId}, story ${storyId}, chapter ${currentChapter}`);
+    // Use Cloud Function to securely update reading progress
+    // This approach ensures server-side security rules are enforced
+    const result = await updateReadingProgressSecure(storyId, currentChapter);
     
-    // Create progress data - store currentChapter as a number if it's a number or can be parsed as one
-    const numericChapter = typeof currentChapter === 'string' ? parseInt(currentChapter, 10) : currentChapter;
-    
-    const progressData: UserStoryProgress = {
-      storyId,
-      currentChapter: !isNaN(numericChapter) ? numericChapter : 0, // Store as number if valid
-      lastReadTimestamp: Timestamp.now()
-    };
-
-    try {
-      // First check if the story is already in the user's library
-      const userLibraryRef = collection(db, 'users', userId, 'userLibrary');
-      const q = query(userLibraryRef, where('storyId', '==', storyId));
-      const querySnapshot = await getDocs(q);
-
-      if (querySnapshot.empty) {
-        // Story not in library yet, add it with the document ID matching the storyId
-        // for easier reference
-        await setDoc(doc(userLibraryRef, storyId), progressData);
-        console.log(`Added new story ${storyId} to user's library`);
-      } else {
-        // Update existing progress
-        const docRef = doc(db, 'users', userId, 'userLibrary', querySnapshot.docs[0].id);
-        await setDoc(docRef, progressData, { merge: true });
-        console.log(`Updated reading progress for existing story ${storyId}`);
-      }
-
-      return { success: true };
-    } catch (dbError) {
-      console.error('Database error updating reading progress:', dbError);
-      return {
-        success: false,
-        error: dbError instanceof Error ? dbError.message : 'Database error occurred'
-      };
+    if (result.success) {
+      console.log(`Successfully updated reading progress for story ${storyId}, chapter ${currentChapter} via Cloud Function`);
+    } else {
+      console.error(`Failed to update reading progress via Cloud Function: ${result.error}`);
     }
+    
+    return result;
   } catch (error) {
     console.error('Error updating reading progress:', error);
     return { 
