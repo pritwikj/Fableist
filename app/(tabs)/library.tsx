@@ -7,7 +7,7 @@
  * a story, they are navigated to the correct page in the story reader.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -16,19 +16,24 @@ import {
   useColorScheme,
   Alert,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { ActivityIndicator } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import Colors from '@/constants/Colors';
 import { fetchUserLibrary } from '@/services/userService';
 import type { LibraryItem } from '@/services/userService';
+import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { db } from '@/services/firebaseConfig';
+import { getCurrentUser } from '@/services/firebaseAuth';
 
 export default function LibraryScreen() {
   const colorScheme = useColorScheme();
   const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   const { 
     data: libraryItems, 
@@ -39,6 +44,43 @@ export default function LibraryScreen() {
     queryKey: ['user-library'],
     queryFn: fetchUserLibrary,
   });
+
+  // Set up a Firestore real-time listener when the screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      const currentUser = getCurrentUser();
+      if (!currentUser) return;
+      
+      const userId = currentUser.uid;
+      console.log('Setting up real-time listener for user library');
+      
+      const libraryRef = collection(db, 'users', userId, 'userLibrary');
+      const libraryQuery = query(libraryRef, orderBy('timestamp', 'desc'));
+      
+      // Create the snapshot listener
+      unsubscribeRef.current = onSnapshot(libraryQuery, 
+        // Success handler
+        (snapshot) => {
+          console.log('Library data changed, invalidating query cache');
+          // Invalidate and refetch the query when data changes
+          queryClient.invalidateQueries({ queryKey: ['user-library'] });
+        },
+        // Error handler
+        (error) => {
+          console.error('Error in Firestore listener:', error);
+        }
+      );
+      
+      // Clean up the listener when component unmounts or screen loses focus
+      return () => {
+        console.log('Cleaning up real-time listener');
+        if (unsubscribeRef.current) {
+          unsubscribeRef.current();
+          unsubscribeRef.current = null;
+        }
+      };
+    }, [queryClient])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

@@ -84,33 +84,40 @@ export async function fetchUserLibrary(): Promise<LibraryItem[]> {
     const currentUser = getCurrentUser();
     
     if (!currentUser) {
+      console.log('User not authenticated, returning empty library');
       throw new Error('User not authenticated');
     }
     
     const userId = currentUser.uid;
+    console.log(`Fetching library for user: ${userId}`); // Debug log
+    
     const libraryRef = collection(db, 'users', userId, 'userLibrary');
     const libraryQuery = query(
       libraryRef,
-      orderBy('lastReadTimestamp', 'desc')
+      orderBy('timestamp', 'desc') // Use timestamp field from your Firebase structure
     );
     
     const librarySnapshot = await getDocs(libraryQuery);
     
     if (librarySnapshot.empty) {
+      console.log('Library is empty, returning empty array');
       return [];
     }
+    
+    console.log(`Found ${librarySnapshot.size} items in the user library`); // Debug log
     
     // Get all library items, handling both new and legacy data structures
     const libraryItems = librarySnapshot.docs.map(doc => {
       const data = doc.data();
+      console.log(`Processing library item: ${doc.id}`, data); // Debug log
+      
       return {
         id: doc.id,
-        storyId: data.storyId || doc.id,
-        // Handle both legacy 'currentPage' and new 'currentChapter' fields (as number or string)
+        storyId: data.storyId || doc.id, // Use document ID if storyId field is missing
         currentChapter: data.currentChapter !== undefined ? data.currentChapter : 0,
         // For backward compatibility, if only currentPage exists but no currentChapter
         ...(!data.hasOwnProperty('currentChapter') && { currentChapter: 0 }),
-        lastReadTimestamp: data.lastReadTimestamp || Timestamp.now(),
+        lastReadTimestamp: data.timestamp || data.lastReadTimestamp || Timestamp.now(),
       };
     }) as LibraryItem[];
     
@@ -118,6 +125,7 @@ export async function fetchUserLibrary(): Promise<LibraryItem[]> {
     const itemsWithStories = await Promise.all(
       libraryItems.map(async (item) => {
         try {
+          console.log(`Fetching metadata for story: ${item.storyId}`); // Debug log
           const storyData = await fetchStoryMetadata(item.storyId);
           return {
             ...item,
@@ -125,11 +133,24 @@ export async function fetchUserLibrary(): Promise<LibraryItem[]> {
           };
         } catch (error) {
           console.error(`Error fetching story ${item.storyId}:`, error);
-          return item; // Return the item without story data if there's an error
+          // Return the item without story data if there's an error
+          // This allows the item to still appear in the library but with placeholder data
+          return {
+            ...item,
+            story: {
+              id: item.storyId,
+              title: `Story ${item.storyId}`,
+              author: "Unknown",
+              coverImage: "https://via.placeholder.com/150",
+              description: "Story details unavailable",
+              defaultCharacterName: "Reader",
+            }
+          };
         }
       })
     );
     
+    console.log(`Returning ${itemsWithStories.length} library items`); // Debug log
     return itemsWithStories;
   } catch (error) {
     console.error('Error fetching user library:', error);
