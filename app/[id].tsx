@@ -60,6 +60,11 @@ export default function StoryReader() {
   const [isAnimating, setIsAnimating] = useState(false);
   const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
+  // Remove the direction tracking and use a more reliable approach
+  const [lastScrollAction, setLastScrollAction] = useState<number>(0);
+  // Track scroll position consistently
+  const [isAtTop, setIsAtTop] = useState<boolean>(false);
+  const [isAtBottom, setIsAtBottom] = useState<boolean>(false);
   
   // Add animation values
   const fadeAnim = React.useRef(new Animated.Value(1)).current;
@@ -338,15 +343,25 @@ export default function StoryReader() {
     // Don't process scroll events during animations
     if (isAnimating) return;
     
-    // Check if we've scrolled to the bottom
+    // First, just track the scroll position without taking action
     const paddingToBottom = 20;
-    const isScrolledToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    const atBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    const atTop = contentOffset.y <= 0;
     
-    // Check if we've scrolled to the top (for scrolling to previous chapter)
-    const isScrolledToTop = contentOffset.y <= 0;
+    // Update position state
+    setIsAtBottom(atBottom);
+    setIsAtTop(atTop);
     
-    // If we're at the end of a chapter and scrolled to the bottom, load the next chapter
-    if (isScrolledToBottom && isChapterEnd && hasNextChapter) {
+    // Don't proceed with navigation logic if we're not at chapter end
+    if (atBottom && isChapterEnd && hasNextChapter) {
+      // Only navigate if we've been at the bottom for a moment (prevents accidental triggers)
+      const now = Date.now();
+      if (now - lastScrollAction < 600) return;
+      
+      // Set timestamp to prevent rapid navigation
+      setLastScrollAction(now);
+      
+      // Rest of next chapter navigation code
       const nextChapterIndex = currentChapterIndex + 1;
       
       // Check if chapter needs to be unlocked
@@ -391,13 +406,16 @@ export default function StoryReader() {
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
       });
     }
-    
-    // If we're at the beginning of a chapter and scrolled to the top, load the previous chapter
-    // (Previous chapter code remains unchanged as we only charge for moving forward)
-    else if (isScrolledToTop && hasPreviousChapter) {
-      // Store the scroll position to detect continuous scrolling attempts
-      const prevChapterIndex = currentChapterIndex - 1;
+    // Separate condition for previous chapter
+    else if (atTop && hasPreviousChapter) {
+      // Add a slight delay to ensure this is intentional
+      const now = Date.now();
+      if (now - lastScrollAction < 600) return;
       
+      // Set timestamp to prevent rapid navigation
+      setLastScrollAction(now);
+      
+      const prevChapterIndex = currentChapterIndex - 1;
       setCurrentChapterIndex(prevChapterIndex);
       
       // Load segments from the previous chapter with animation
@@ -731,7 +749,9 @@ export default function StoryReader() {
             style={styles.scrollView}
             contentContainerStyle={styles.contentContainer}
             onScroll={handleScroll}
-            scrollEventThrottle={16}
+            scrollEventThrottle={100}
+            overScrollMode="never"
+            bounces={isChapterEnd || hasPreviousChapter}
           >
             <Text style={styles.chapterTitle}>
               {currentChapter?.title}
