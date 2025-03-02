@@ -340,13 +340,16 @@ export default function StoryReader() {
   const handleScroll = async (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
     
-    // Don't process scroll events during animations
+    // Don't process scroll events during animations or choice handling
     if (isAnimating) return;
     
     // First, just track the scroll position without taking action
     const paddingToBottom = 20;
     const atBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
-    const atTop = contentOffset.y <= 0;
+    
+    // Add a small threshold for top detection to prevent accidental triggers
+    // Only consider "at top" if we're really at the top (not just close)
+    const atTop = contentOffset.y === 0;
     
     // Update position state
     setIsAtBottom(atBottom);
@@ -356,7 +359,7 @@ export default function StoryReader() {
     if (atBottom && isChapterEnd && hasNextChapter) {
       // Only navigate if we've been at the bottom for a moment (prevents accidental triggers)
       const now = Date.now();
-      if (now - lastScrollAction < 600) return;
+      if (now - lastScrollAction < 800) return;  // Increased from 600 to 800ms for more safety
       
       // Set timestamp to prevent rapid navigation
       setLastScrollAction(now);
@@ -410,7 +413,7 @@ export default function StoryReader() {
     else if (atTop && hasPreviousChapter) {
       // Add a slight delay to ensure this is intentional
       const now = Date.now();
-      if (now - lastScrollAction < 600) return;
+      if (now - lastScrollAction < 1000) return; // Increased delay for previous chapter navigation
       
       // Set timestamp to prevent rapid navigation
       setLastScrollAction(now);
@@ -484,6 +487,9 @@ export default function StoryReader() {
   };
 
   const handleChoice = (segment: any, choice: string) => {
+    // Set a flag to prevent scroll handling immediately after choice selection
+    setIsAnimating(true);
+    
     // Update the segment with the selected choice
     const updatedSegments = storySegments.map(s => {
       if (s.index === segment.index) {
@@ -566,6 +572,11 @@ export default function StoryReader() {
           }, 500);
         }
       }
+
+      // Allow scroll handling again after content is updated and scrolled
+      setTimeout(() => {
+        setIsAnimating(false);
+      }, 1000);
     }, 500);
   };
 
@@ -681,7 +692,13 @@ export default function StoryReader() {
                       borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
                     },
                   ]}
-                  onPress={() => handleChoice(segment, choice)}
+                  onPress={(e) => {
+                    // Prevent event propagation
+                    e.stopPropagation();
+                    // Handle choice after preventing propagation
+                    handleChoice(segment, choice);
+                  }}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.choiceText}>
                     {choice}
@@ -752,6 +769,7 @@ export default function StoryReader() {
             scrollEventThrottle={100}
             overScrollMode="never"
             bounces={isChapterEnd || hasPreviousChapter}
+            scrollEnabled={!isAnimating}
           >
             <Text style={styles.chapterTitle}>
               {currentChapter?.title}
