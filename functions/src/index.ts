@@ -61,11 +61,38 @@ export const updateReadingProgress = functions.https.onCall(async (data, context
     const docSnapshot = await libraryItemRef.get();
     
     if (docSnapshot.exists) {
-      // Update existing document
-      await libraryItemRef.update(progressData);
+      // Get existing data
+      const existingData = docSnapshot.data() || {};
+      
+      // Get the current unlocked chapters or initialize empty array
+      let unlockedChapters = existingData.unlockedChapters || [];
+      
+      // First 5 chapters (0-4) are always free
+      // If the current chapter is already in unlocked chapters, nothing to add
+      if (numericChapter > 4 && !unlockedChapters.includes(numericChapter)) {
+        // Add current chapter to unlocked chapters
+        unlockedChapters.push(numericChapter);
+      }
+      
+      // Update with new data including unlocked chapters
+      await libraryItemRef.update({
+        ...progressData,
+        unlockedChapters
+      });
     } else {
-      // Create new document
-      await libraryItemRef.set(progressData);
+      // Create new document with initial unlocked chapters (free + current)
+      const initialUnlockedChapters = Array.from({ length: 5 }, (_, i) => i); // First 5 chapters (0-4)
+      
+      // If the current chapter is > 4, add it to unlocked chapters
+      if (numericChapter > 4 && !initialUnlockedChapters.includes(numericChapter)) {
+        initialUnlockedChapters.push(numericChapter);
+      }
+      
+      // Create library item with initial unlocked chapters
+      await libraryItemRef.set({
+        ...progressData,
+        unlockedChapters: initialUnlockedChapters
+      });
     }
     
     // Also update the reading progress collection (if it's being used)

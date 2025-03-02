@@ -35,7 +35,18 @@ import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
 import { fetchStoryContent, updateReadingProgress } from '@/services/storyService';
+import { fetchUserProfile, updateUserCoins, isChapterUnlocked, unlockChapter as unlockChapterService } from '@/services/userService';
 import { isAuthenticated } from '@/services/firebaseAuth';
+
+// Define user profile interface
+interface UserProfile {
+  id: string;
+  displayName?: string;
+  email?: string;
+  coins?: number;
+  joinDate?: string;
+  [key: string]: any;
+}
 
 export default function StoryReader() {
   const { id, initialChapter } = useLocalSearchParams();
@@ -47,6 +58,7 @@ export default function StoryReader() {
   const [isChapterEnd, setIsChapterEnd] = useState(false);
   const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
   
   // Add animation values
@@ -58,6 +70,13 @@ export default function StoryReader() {
   const { data: story, isLoading, error } = useQuery({
     queryKey: ['story-content', id],
     queryFn: () => fetchStoryContent(id as string),
+  });
+  
+  // Fetch user profile to get coin balance
+  const { data: userProfile, refetch: refetchUserProfile } = useQuery<UserProfile>({
+    queryKey: ['user-profile'],
+    queryFn: fetchUserProfile,
+    enabled: isAuthenticated(),
   });
 
   const router = useRouter();
@@ -93,6 +112,39 @@ export default function StoryReader() {
     }
   }, [story, initialChapter, isNavigatingToSavedPosition]);
 
+  // Load user's unlocked chapters from their progress
+  useEffect(() => {
+    const loadUnlockedChapters = async () => {
+      if (story && isAuthenticated()) {
+        // We consider all chapters <= 4 (first 5 chapters) as free
+        const freeChapters = Array.from({ length: 5 }, (_, i) => i);
+        
+        // For chapters > 4, check if they've been previously unlocked
+        if (story.chapters.length > 5) {
+          const storyId = id as string;
+          
+          // Initialize with free chapters
+          let allUnlockedChapters = [...freeChapters];
+          
+          // Check each non-free chapter if it's already unlocked
+          for (let i = 5; i < story.chapters.length; i++) {
+            const isUnlocked = await isChapterUnlocked(storyId, i);
+            if (isUnlocked) {
+              allUnlockedChapters.push(i);
+            }
+          }
+          
+          setUnlockedChapters(allUnlockedChapters);
+        } else {
+          // If there are 5 or fewer chapters, all are free
+          setUnlockedChapters(freeChapters);
+        }
+      }
+    };
+    
+    loadUnlockedChapters();
+  }, [story, id]);
+
   // Update reading progress when chapter changes
   useEffect(() => {
     if (isAuthenticated() && story && currentChapter && !isFirstPage) {
@@ -100,6 +152,14 @@ export default function StoryReader() {
       // This approach ensures server-side security rules are enforced
       updateReadingProgress(story.id, currentChapterIndex)
         .catch(error => console.error('Failed to update reading progress:', error));
+      
+      // Mark this chapter as unlocked
+      setUnlockedChapters(prev => {
+        if (!prev.includes(currentChapterIndex)) {
+          return [...prev, currentChapterIndex];
+        }
+        return prev;
+      });
     }
   }, [currentChapterIndex, story, isFirstPage]);
 
@@ -166,7 +226,113 @@ export default function StoryReader() {
     }
   };
 
-  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  // Check if a chapter requires payment
+  const isChapterLocked = (chapterIndex: number): boolean => {
+    // First 5 chapters (indices 0-4) are free
+    if (chapterIndex <= 4) return false;
+    
+    // If chapter is in unlockedChapters, it's already been unlocked
+    if (unlockedChapters.includes(chapterIndex)) return false;
+    
+    return true;
+  };
+
+  // Unlock a chapter by paying coins
+  const unlockChapter = async (chapterIndex: number): Promise<boolean> => {
+    if (!isAuthenticated() || !userProfile) {
+      Alert.alert('Authentication Required', 'Please log in to unlock chapters.');
+      return false;
+    }
+
+    const coinCost = 5; // Cost per chapter
+    const currentCoins = userProfile.coins || 0;
+
+    if (currentCoins < coinCost) {
+      Alert.alert('Insufficient Coins', 
+        `You need ${coinCost} coins to unlock this chapter. You currently have ${currentCoins} coins.`);
+      return false;
+    }
+
+    try {
+      // First subtract coins using the cloud function
+      const coinResult = await updateUserCoins(coinCost, 'subtract');
+      
+      if (!coinResult.success) {
+        Alert.alert('Error', coinResult.error || 'Failed to update coin balance');
+        return false;
+      }
+
+      // Then mark the chapter as unlocked in the database
+      const unlockResult = await unlockChapterService(id as string, chapterIndex);
+      
+      if (!unlockResult) {
+        // If unlocking failed, attempt to refund the coins
+        await updateUserCoins(coinCost, 'add');
+        Alert.alert('Error', 'Failed to unlock chapter. Your coins have been refunded.');
+        return false;
+      }
+
+      // Update the local unlocked chapters state
+      setUnlockedChapters(prev => [...prev, chapterIndex]);
+      
+      // Refresh user profile to get updated coin balance
+      refetchUserProfile();
+      
+      return true;
+    } catch (error) {
+      console.error('Error unlocking chapter:', error);
+      Alert.alert('Error', 'Failed to unlock chapter. Please try again.');
+      return false;
+    }
+  };
+
+  // Modified handleNextChapter with coin check
+  const handleNextChapter = async () => {
+    if (hasNextChapter) {
+      const nextChapterIndex = currentChapterIndex + 1;
+      
+      // Check if chapter needs to be unlocked
+      if (isChapterLocked(nextChapterIndex)) {
+        Alert.alert(
+          'Unlock Chapter',
+          `This chapter costs 5 coins to unlock. Do you want to continue?`,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+            {
+              text: 'Unlock',
+              onPress: async () => {
+                const unlocked = await unlockChapter(nextChapterIndex);
+                if (unlocked) {
+                  // Continue with chapter navigation
+                  setCurrentChapterIndex(nextChapterIndex);
+                  animateContentChange(() => {
+                    setIsChapterEnd(false);
+                    loadChapterSegments(nextChapterIndex);
+                    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+                  });
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
+      
+      // If chapter is free or already unlocked, proceed normally
+      setCurrentChapterIndex(nextChapterIndex);
+      animateContentChange(() => {
+        setIsChapterEnd(false);
+        loadChapterSegments(nextChapterIndex);
+        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      });
+    }
+  };
+
+  // Modified handleScroll with coin check for next chapter
+  const handleScroll = async (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
     
     // Don't process scroll events during animations
@@ -182,6 +348,38 @@ export default function StoryReader() {
     // If we're at the end of a chapter and scrolled to the bottom, load the next chapter
     if (isScrolledToBottom && isChapterEnd && hasNextChapter) {
       const nextChapterIndex = currentChapterIndex + 1;
+      
+      // Check if chapter needs to be unlocked
+      if (isChapterLocked(nextChapterIndex)) {
+        Alert.alert(
+          'Unlock Chapter',
+          `This chapter costs 5 coins to unlock. Do you want to continue?`,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+            {
+              text: 'Unlock',
+              onPress: async () => {
+                const unlocked = await unlockChapter(nextChapterIndex);
+                if (unlocked) {
+                  // Continue with chapter navigation
+                  setCurrentChapterIndex(nextChapterIndex);
+                  animateContentChange(() => {
+                    setIsChapterEnd(false);
+                    loadChapterSegments(nextChapterIndex);
+                    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+                  });
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
+      
+      // If chapter is free or already unlocked, proceed normally
       setCurrentChapterIndex(nextChapterIndex);
       
       // Load segments from the next chapter with animation
@@ -195,6 +393,7 @@ export default function StoryReader() {
     }
     
     // If we're at the beginning of a chapter and scrolled to the top, load the previous chapter
+    // (Previous chapter code remains unchanged as we only charge for moving forward)
     else if (isScrolledToTop && hasPreviousChapter) {
       // Store the scroll position to detect continuous scrolling attempts
       const prevChapterIndex = currentChapterIndex - 1;
@@ -223,22 +422,6 @@ export default function StoryReader() {
       animateContentChange(() => {
         setIsChapterEnd(true); // Set to true since we're loading a complete chapter
         loadChapterSegments(prevChapterIndex);
-        
-        // Scroll to the top for the new chapter
-        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-      });
-    }
-  };
-
-  const handleNextChapter = () => {
-    if (hasNextChapter) {
-      const nextChapterIndex = currentChapterIndex + 1;
-      setCurrentChapterIndex(nextChapterIndex);
-      
-      // Load segments from the next chapter with animation
-      animateContentChange(() => {
-        setIsChapterEnd(false);
-        loadChapterSegments(nextChapterIndex);
         
         // Scroll to the top for the new chapter
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
@@ -416,6 +599,9 @@ export default function StoryReader() {
   const renderNextChapterIndicator = () => {
     if (!isChapterEnd || !hasNextChapter) return null;
     
+    const nextChapterIndex = currentChapterIndex + 1;
+    const isNextChapterLocked = isChapterLocked(nextChapterIndex);
+    
     return (
       <Animated.View 
         style={[
@@ -424,15 +610,17 @@ export default function StoryReader() {
         ]}
       >
         <RNText style={styles.nextChapterText}>
-          {story?.chapters[currentChapterIndex + 1]?.title}
+          {story?.chapters[nextChapterIndex]?.title}
         </RNText>
         <MaterialIcons 
-          name="keyboard-arrow-down" 
+          name={isNextChapterLocked ? "lock" : "keyboard-arrow-down"} 
           size={32} 
           color={colorScheme === 'dark' ? '#4a9eff' : '#2b7de9'} 
         />
         <RNText style={styles.nextChapterInstructions}>
-          Scroll down to continue
+          {isNextChapterLocked 
+            ? "Costs 5 coins to unlock" 
+            : "Scroll down to continue"}
         </RNText>
       </Animated.View>
     );

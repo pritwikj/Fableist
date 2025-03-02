@@ -32,6 +32,7 @@ export interface LibraryItem {
   currentChapter: number | string; // Can be number or string for backward compatibility
   lastReadTimestamp: Timestamp;
   story?: StoryMetadata; // Joined story data
+  unlockedChapters?: number[]; // Track which chapters are unlocked
 }
 
 /**
@@ -257,5 +258,96 @@ export async function updateUserCoins(
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred'
     };
+  }
+}
+
+/**
+ * Checks if a chapter is unlocked for a user
+ * @param storyId The ID of the story
+ * @param chapterIndex The chapter index to check
+ * @returns Promise resolving to a boolean indicating if the chapter is unlocked
+ */
+export async function isChapterUnlocked(storyId: string, chapterIndex: number): Promise<boolean> {
+  try {
+    const currentUser = getCurrentUser();
+    
+    if (!currentUser) {
+      console.log('User not authenticated, chapters are not unlocked');
+      return false;
+    }
+    
+    // Free chapters (first 5) are always unlocked
+    if (chapterIndex <= 4) {
+      return true;
+    }
+    
+    const userId = currentUser.uid;
+    const libraryItemRef = doc(db, 'users', userId, 'userLibrary', storyId);
+    const libraryItemDoc = await getDoc(libraryItemRef);
+    
+    if (!libraryItemDoc.exists()) {
+      // Item not in library, only free chapters are available
+      return false;
+    }
+    
+    const data = libraryItemDoc.data();
+    const unlockedChapters = data.unlockedChapters || [];
+    
+    // Check if chapter is in the unlocked list
+    return unlockedChapters.includes(chapterIndex);
+  } catch (error) {
+    console.error('Error checking if chapter is unlocked:', error);
+    return false;
+  }
+}
+
+/**
+ * Marks a chapter as unlocked for a user
+ * @param storyId The ID of the story
+ * @param chapterIndex The chapter index to unlock
+ * @returns Promise resolving to a boolean indicating success
+ */
+export async function unlockChapter(storyId: string, chapterIndex: number): Promise<boolean> {
+  try {
+    const currentUser = getCurrentUser();
+    
+    if (!currentUser) {
+      console.log('User not authenticated, cannot unlock chapter');
+      return false;
+    }
+    
+    const userId = currentUser.uid;
+    const libraryItemRef = doc(db, 'users', userId, 'userLibrary', storyId);
+    const libraryItemDoc = await getDoc(libraryItemRef);
+    
+    // Prepare update data
+    let unlockedChapters: number[] = [];
+    
+    if (libraryItemDoc.exists()) {
+      const data = libraryItemDoc.data();
+      unlockedChapters = data.unlockedChapters || [];
+      
+      // Add the chapter if it's not already unlocked
+      if (!unlockedChapters.includes(chapterIndex)) {
+        unlockedChapters.push(chapterIndex);
+      }
+      
+      // Update the document
+      await updateDoc(libraryItemRef, { unlockedChapters });
+    } else {
+      // Create a new library item with the unlocked chapter
+      unlockedChapters = [chapterIndex];
+      await setDoc(libraryItemRef, {
+        storyId,
+        currentChapter: 0,
+        lastReadTimestamp: serverTimestamp(),
+        unlockedChapters
+      });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error unlocking chapter:', error);
+    return false;
   }
 } 
