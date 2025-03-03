@@ -823,9 +823,18 @@ export default function StoryReader() {
     
     // Check if we should load the next chapter
     if (atBottom && hasNextChapter) {
-      // Only navigate if we've been at the bottom for a moment (prevents accidental triggers)
+      // Increased time threshold to 1200ms (1.2 seconds) to make navigation require more effort
       const now = Date.now();
-      if (now - lastScrollAction < 800) return;
+      if (now - lastScrollAction < 1200) return;
+      
+      // Calculate the percentage of extra scroll beyond the content
+      // This detects how "forceful" the swipe/scroll was
+      const overscrollPercentage = Math.max(0, 
+        (layoutMeasurement.height + contentOffset.y - contentSize.height) / layoutMeasurement.height * 100
+      );
+      
+      // Only load next chapter if the user has scrolled with enough force (at least 5% overscroll)
+      if (overscrollPercentage < 5) return;
       
       // Set timestamp to prevent rapid navigation
       setLastScrollAction(now);
@@ -1410,10 +1419,11 @@ export default function StoryReader() {
             style={styles.scrollView}
             contentContainerStyle={styles.contentContainer}
             onScroll={handleScroll}
-            scrollEventThrottle={100}
+            scrollEventThrottle={200}
             overScrollMode="always"
             bounces={true}
             scrollEnabled={!isAnimating}
+            decelerationRate="fast"
           >
             {/* Chapter titles now rendered with each segment group */}
             <Animated.View
