@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -9,12 +9,13 @@ import {
 import { router } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { ActivityIndicator } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { fetchAllStories, fetchUserLibrary } from '@/services/storyService';
 import type { StoryMetadata, LibraryStory } from '@/services/storyService';
 import { isAuthenticated } from '@/services/firebaseAuth';
+import { useFocusEffect } from '@react-navigation/native';
 
 // Types
 type Story = StoryMetadata & {
@@ -25,52 +26,58 @@ type Story = StoryMetadata & {
 export default function StoriesScreen() {
   const colorScheme = useColorScheme();
   const [refreshing, setRefreshing] = useState(false);
-  const [userLibrary, setUserLibrary] = useState<Record<string, LibraryStory>>({});
+  const queryClient = useQueryClient();
 
-  const { data: stories, isLoading, refetch } = useQuery({
+  // Query for stories
+  const { 
+    data: stories, 
+    isLoading: isStoriesLoading, 
+    refetch: refetchStories 
+  } = useQuery({
     queryKey: ['stories'],
     queryFn: fetchAllStories,
   });
 
-  // Fetch the user's library to get reading progress
-  useEffect(() => {
-    const loadUserLibrary = async () => {
+  // Query for user library
+  const { 
+    data: userLibraryData, 
+    isLoading: isLibraryLoading,
+    refetch: refetchLibrary
+  } = useQuery({
+    queryKey: ['userLibrary'],
+    queryFn: fetchUserLibrary,
+    // Only fetch if user is authenticated
+    enabled: isAuthenticated(),
+    // Convert array to map for easier lookup
+    select: (data: LibraryStory[]) => {
+      const libraryMap: Record<string, LibraryStory> = {};
+      data.forEach(item => {
+        libraryMap[item.id] = item;
+      });
+      return libraryMap;
+    }
+  });
+
+  // Use empty object as fallback when library is loading or not available
+  const userLibrary = userLibraryData || {};
+
+  // Refresh library data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
       if (isAuthenticated()) {
-        try {
-          const libraryItems = await fetchUserLibrary();
-          // Create a map of storyId -> LibraryStory for easy lookup
-          const libraryMap: Record<string, LibraryStory> = {};
-          libraryItems.forEach(item => {
-            libraryMap[item.id] = item;
-          });
-          setUserLibrary(libraryMap);
-        } catch (error) {
-          console.error('Error loading user library in StoriesScreen:', error);
-        }
+        refetchLibrary();
       }
-    };
-    
-    loadUserLibrary();
-  }, []);
+    }, [refetchLibrary])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await refetch();
-    // Also refresh the user library
-    if (isAuthenticated()) {
-      try {
-        const libraryItems = await fetchUserLibrary();
-        const libraryMap: Record<string, LibraryStory> = {};
-        libraryItems.forEach(item => {
-          libraryMap[item.id] = item;
-        });
-        setUserLibrary(libraryMap);
-      } catch (error) {
-        console.error('Error refreshing user library:', error);
-      }
-    }
+    await Promise.all([
+      refetchStories(),
+      isAuthenticated() ? refetchLibrary() : Promise.resolve()
+    ]);
     setRefreshing(false);
-  }, [refetch]);
+  }, [refetchStories, refetchLibrary]);
 
   const handleStoryPress = (item: Story) => {
     // Check if this story exists in the user's library
@@ -153,6 +160,8 @@ export default function StoriesScreen() {
       </TouchableOpacity>
     );
   };
+
+  const isLoading = isStoriesLoading;
 
   if (isLoading) {
     return (
