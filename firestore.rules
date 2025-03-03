@@ -1,0 +1,54 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // Story data is read-only for all authenticated users
+    // Stories are expected to be created by backend processes or direct Firestore management
+    match /stories/{storyId} {
+      allow read: if isAuthenticated();
+      // No client-side write access to stories - managed through Firebase console or server
+      allow write: if false;
+      
+      // Story chapters - same rules as parent story
+      match /chapters/{chapterId} {
+        allow read: if isAuthenticated();
+        allow write: if false;
+      }
+    }
+
+    // User data is only accessible by the user themselves
+    match /users/{userId} {
+      // Allow users to read their data but not write to specific fields
+      allow read: if isOwner(userId);
+      // Allow write but validate that coins field is not being modified
+      allow update: if isOwner(userId) && 
+                     (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['coins']));
+      allow create, delete: if isOwner(userId);
+      
+      // User's library (stories they've started reading)
+      match /userLibrary/{itemId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // User's reading progress - read-only for users
+      match /readingProgress/{progressId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+    }
+    
+    // Deny everything else by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

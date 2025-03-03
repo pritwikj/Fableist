@@ -14,13 +14,18 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pritwik.Fableist",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.pritwik.Fableist"
     },
     "web": {
       "bundler": "metro",
@@ -29,10 +34,29 @@
     },
     "plugins": [
       "expo-router",
-      "react-native-purchases"
+      "expo-build-properties",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static",
+            "deploymentTarget": "15.1",
+            "useModularHeaders": true
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "50aaf7e0-eb9c-44fe-9f17-7a4a85e12b06"
+      }
+    },
+    "owner": "pritwik"
   }
 }

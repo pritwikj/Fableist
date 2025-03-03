@@ -29,13 +29,26 @@ import {
   View as RNView,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Keyboard,
+  TouchableWithoutFeedback
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
 import { fetchStoryContent, updateReadingProgress } from '@/services/storyService';
+import { fetchUserProfile, updateUserCoins, isChapterUnlocked, unlockChapter as unlockChapterService } from '@/services/userService';
 import { isAuthenticated } from '@/services/firebaseAuth';
+
+// Define user profile interface
+interface UserProfile {
+  id: string;
+  displayName?: string;
+  email?: string;
+  coins?: number;
+  joinDate?: string;
+  [key: string]: any;
+}
 
 export default function StoryReader() {
   const { id, initialChapter } = useLocalSearchParams();
@@ -47,7 +60,13 @@ export default function StoryReader() {
   const [isChapterEnd, setIsChapterEnd] = useState(false);
   const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
+  // Remove the direction tracking and use a more reliable approach
+  const [lastScrollAction, setLastScrollAction] = useState<number>(0);
+  // Track scroll position consistently
+  const [isAtTop, setIsAtTop] = useState<boolean>(false);
+  const [isAtBottom, setIsAtBottom] = useState<boolean>(false);
   
   // Add animation values
   const fadeAnim = React.useRef(new Animated.Value(1)).current;
@@ -58,6 +77,13 @@ export default function StoryReader() {
   const { data: story, isLoading, error } = useQuery({
     queryKey: ['story-content', id],
     queryFn: () => fetchStoryContent(id as string),
+  });
+  
+  // Fetch user profile to get coin balance
+  const { data: userProfile, refetch: refetchUserProfile } = useQuery<UserProfile>({
+    queryKey: ['user-profile'],
+    queryFn: fetchUserProfile,
+    enabled: isAuthenticated(),
   });
 
   const router = useRouter();
@@ -93,12 +119,54 @@ export default function StoryReader() {
     }
   }, [story, initialChapter, isNavigatingToSavedPosition]);
 
+  // Load user's unlocked chapters from their progress
+  useEffect(() => {
+    const loadUnlockedChapters = async () => {
+      if (story && isAuthenticated()) {
+        // We consider all chapters <= 4 (first 5 chapters) as free
+        const freeChapters = Array.from({ length: 5 }, (_, i) => i);
+        
+        // For chapters > 4, check if they've been previously unlocked
+        if (story.chapters.length > 5) {
+          const storyId = id as string;
+          
+          // Initialize with free chapters
+          let allUnlockedChapters = [...freeChapters];
+          
+          // Check each non-free chapter if it's already unlocked
+          for (let i = 5; i < story.chapters.length; i++) {
+            const isUnlocked = await isChapterUnlocked(storyId, i);
+            if (isUnlocked) {
+              allUnlockedChapters.push(i);
+            }
+          }
+          
+          setUnlockedChapters(allUnlockedChapters);
+        } else {
+          // If there are 5 or fewer chapters, all are free
+          setUnlockedChapters(freeChapters);
+        }
+      }
+    };
+    
+    loadUnlockedChapters();
+  }, [story, id]);
+
   // Update reading progress when chapter changes
   useEffect(() => {
     if (isAuthenticated() && story && currentChapter && !isFirstPage) {
-      // Update reading progress in Firestore with current chapter index as a number
+      // Update reading progress via Cloud Function to ensure secure database operations
+      // This approach ensures server-side security rules are enforced
       updateReadingProgress(story.id, currentChapterIndex)
         .catch(error => console.error('Failed to update reading progress:', error));
+      
+      // Mark this chapter as unlocked
+      setUnlockedChapters(prev => {
+        if (!prev.includes(currentChapterIndex)) {
+          return [...prev, currentChapterIndex];
+        }
+        return prev;
+      });
     }
   }, [currentChapterIndex, story, isFirstPage]);
 
@@ -165,22 +233,173 @@ export default function StoryReader() {
     }
   };
 
-  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  // Check if a chapter requires payment
+  const isChapterLocked = (chapterIndex: number): boolean => {
+    // First 5 chapters (indices 0-4) are free
+    if (chapterIndex <= 4) return false;
+    
+    // If chapter is in unlockedChapters, it's already been unlocked
+    if (unlockedChapters.includes(chapterIndex)) return false;
+    
+    return true;
+  };
+
+  // Unlock a chapter by paying coins
+  const unlockChapter = async (chapterIndex: number): Promise<boolean> => {
+    if (!isAuthenticated() || !userProfile) {
+      Alert.alert('Authentication Required', 'Please log in to unlock chapters.');
+      return false;
+    }
+
+    const coinCost = 5; // Cost per chapter
+    const currentCoins = userProfile.coins || 0;
+
+    if (currentCoins < coinCost) {
+      Alert.alert('Insufficient Coins', 
+        `You need ${coinCost} coins to unlock this chapter. You currently have ${currentCoins} coins.`);
+      return false;
+    }
+
+    try {
+      // First subtract coins using the cloud function
+      const coinResult = await updateUserCoins(coinCost, 'subtract');
+      
+      if (!coinResult.success) {
+        Alert.alert('Error', coinResult.error || 'Failed to update coin balance');
+        return false;
+      }
+
+      // Then mark the chapter as unlocked in the database
+      const unlockResult = await unlockChapterService(id as string, chapterIndex);
+      
+      if (!unlockResult) {
+        // If unlocking failed, attempt to refund the coins
+        await updateUserCoins(coinCost, 'add');
+        Alert.alert('Error', 'Failed to unlock chapter. Your coins have been refunded.');
+        return false;
+      }
+
+      // Update the local unlocked chapters state
+      setUnlockedChapters(prev => [...prev, chapterIndex]);
+      
+      // Refresh user profile to get updated coin balance
+      refetchUserProfile();
+      
+      return true;
+    } catch (error) {
+      console.error('Error unlocking chapter:', error);
+      Alert.alert('Error', 'Failed to unlock chapter. Please try again.');
+      return false;
+    }
+  };
+
+  // Modified handleNextChapter with coin check
+  const handleNextChapter = async () => {
+    if (hasNextChapter) {
+      const nextChapterIndex = currentChapterIndex + 1;
+      
+      // Check if chapter needs to be unlocked
+      if (isChapterLocked(nextChapterIndex)) {
+        Alert.alert(
+          'Unlock Chapter',
+          `This chapter costs 5 coins to unlock. Do you want to continue?`,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+            {
+              text: 'Unlock',
+              onPress: async () => {
+                const unlocked = await unlockChapter(nextChapterIndex);
+                if (unlocked) {
+                  // Continue with chapter navigation
+                  setCurrentChapterIndex(nextChapterIndex);
+                  animateContentChange(() => {
+                    setIsChapterEnd(false);
+                    loadChapterSegments(nextChapterIndex);
+                    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+                  });
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
+      
+      // If chapter is free or already unlocked, proceed normally
+      setCurrentChapterIndex(nextChapterIndex);
+      animateContentChange(() => {
+        setIsChapterEnd(false);
+        loadChapterSegments(nextChapterIndex);
+        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      });
+    }
+  };
+
+  // Modified handleScroll with coin check for next chapter
+  const handleScroll = async (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
     
-    // Don't process scroll events during animations
+    // Don't process scroll events during animations or choice handling
     if (isAnimating) return;
     
-    // Check if we've scrolled to the bottom
+    // First, just track the scroll position without taking action
     const paddingToBottom = 20;
-    const isScrolledToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    const atBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
     
-    // Check if we've scrolled to the top (for scrolling to previous chapter)
-    const isScrolledToTop = contentOffset.y <= 0;
+    // Add a small threshold for top detection to prevent accidental triggers
+    // Only consider "at top" if we're really at the top (not just close)
+    const atTop = contentOffset.y <= 5; // Slightly more forgiving threshold for top detection
     
-    // If we're at the end of a chapter and scrolled to the bottom, load the next chapter
-    if (isScrolledToBottom && isChapterEnd && hasNextChapter) {
+    // Update position state
+    setIsAtBottom(atBottom);
+    setIsAtTop(atTop);
+    
+    // Don't proceed with navigation logic if we're not at chapter end
+    if (atBottom && isChapterEnd && hasNextChapter) {
+      // Only navigate if we've been at the bottom for a moment (prevents accidental triggers)
+      const now = Date.now();
+      if (now - lastScrollAction < 800) return;  // Increased from 600 to 800ms for more safety
+      
+      // Set timestamp to prevent rapid navigation
+      setLastScrollAction(now);
+      
+      // Rest of next chapter navigation code
       const nextChapterIndex = currentChapterIndex + 1;
+      
+      // Check if chapter needs to be unlocked
+      if (isChapterLocked(nextChapterIndex)) {
+        Alert.alert(
+          'Unlock Chapter',
+          `This chapter costs 5 coins to unlock. Do you want to continue?`,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+            {
+              text: 'Unlock',
+              onPress: async () => {
+                const unlocked = await unlockChapter(nextChapterIndex);
+                if (unlocked) {
+                  // Continue with chapter navigation
+                  setCurrentChapterIndex(nextChapterIndex);
+                  animateContentChange(() => {
+                    setIsChapterEnd(false);
+                    loadChapterSegments(nextChapterIndex);
+                    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+                  });
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
+      
+      // If chapter is free or already unlocked, proceed normally
       setCurrentChapterIndex(nextChapterIndex);
       
       // Load segments from the next chapter with animation
@@ -192,20 +411,25 @@ export default function StoryReader() {
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
       });
     }
-    
-    // If we're at the beginning of a chapter and scrolled to the top, load the previous chapter
-    else if (isScrolledToTop && hasPreviousChapter) {
-      // Store the scroll position to detect continuous scrolling attempts
-      const prevChapterIndex = currentChapterIndex - 1;
+    // Separate condition for previous chapter
+    else if (atTop && hasPreviousChapter && contentOffset.y <= 0) {
+      // Check if user is actively pulling down at the top (for previous chapter)
+      // Add a slight delay to ensure this is intentional
+      const now = Date.now();
+      if (now - lastScrollAction < 800) return; // Use the same delay as next chapter navigation
       
+      // Set timestamp to prevent rapid navigation
+      setLastScrollAction(now);
+      
+      const prevChapterIndex = currentChapterIndex - 1;
       setCurrentChapterIndex(prevChapterIndex);
       
       // Load segments from the previous chapter with animation
       animateContentChange(() => {
-        setIsChapterEnd(true); // Set to true since we're loading a complete chapter
         loadChapterSegments(prevChapterIndex);
+        setIsChapterEnd(true); // Set to true to position at the end of the previous chapter
         
-        // Scroll to the bottom of the previous chapter to position correctly
+        // Scroll to the bottom of the previous chapter after it's loaded
         setTimeout(() => {
           scrollViewRef.current?.scrollToEnd({ animated: false });
         }, 100);
@@ -222,22 +446,6 @@ export default function StoryReader() {
       animateContentChange(() => {
         setIsChapterEnd(true); // Set to true since we're loading a complete chapter
         loadChapterSegments(prevChapterIndex);
-        
-        // Scroll to the top for the new chapter
-        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-      });
-    }
-  };
-
-  const handleNextChapter = () => {
-    if (hasNextChapter) {
-      const nextChapterIndex = currentChapterIndex + 1;
-      setCurrentChapterIndex(nextChapterIndex);
-      
-      // Load segments from the next chapter with animation
-      animateContentChange(() => {
-        setIsChapterEnd(false);
-        loadChapterSegments(nextChapterIndex);
         
         // Scroll to the top for the new chapter
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
@@ -282,6 +490,9 @@ export default function StoryReader() {
   };
 
   const handleChoice = (segment: any, choice: string) => {
+    // Set a flag to prevent scroll handling immediately after choice selection
+    setIsAnimating(true);
+    
     // Update the segment with the selected choice
     const updatedSegments = storySegments.map(s => {
       if (s.index === segment.index) {
@@ -364,6 +575,11 @@ export default function StoryReader() {
           }, 500);
         }
       }
+
+      // Allow scroll handling again after content is updated and scrolled
+      setTimeout(() => {
+        setIsAnimating(false);
+      }, 1000);
     }, 500);
   };
 
@@ -382,38 +598,43 @@ export default function StoryReader() {
 
   const renderFirstPage = () => {
     return (
-      <View style={styles.firstPageContainer}>
-        <Text style={styles.storyTitle}>
-          Welcome to {story?.title}
-        </Text>
-        <Text style={styles.namePrompt}>
-          Before we begin your adventure, what shall we call you?
-        </Text>
-        <TextInput
-          style={[
-            styles.nameInput,
-            { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
-          ]}
-          value={characterName}
-          onChangeText={setCharacterName}
-          placeholder="Enter your name"
-          placeholderTextColor="#666"
-        />
-        <TouchableOpacity
-          style={[
-            styles.startButton,
-            { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
-          ]}
-          onPress={handleStartReading}
-        >
-          <Text style={styles.startButtonText}>Begin</Text>
-        </TouchableOpacity>
-      </View>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <View style={styles.firstPageContainer}>
+          <Text style={styles.storyTitle}>
+            Welcome to {story?.title}
+          </Text>
+          <Text style={styles.namePrompt}>
+            Before we begin your adventure, what shall we call you?
+          </Text>
+          <TextInput
+            style={[
+              styles.nameInput,
+              { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+            ]}
+            value={characterName}
+            onChangeText={setCharacterName}
+            placeholder="Enter your name"
+            placeholderTextColor="#666"
+          />
+          <TouchableOpacity
+            style={[
+              styles.startButton,
+              { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+            ]}
+            onPress={handleStartReading}
+          >
+            <Text style={styles.startButtonText}>Begin</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableWithoutFeedback>
     );
   };
 
   const renderNextChapterIndicator = () => {
     if (!isChapterEnd || !hasNextChapter) return null;
+    
+    const nextChapterIndex = currentChapterIndex + 1;
+    const isNextChapterLocked = isChapterLocked(nextChapterIndex);
     
     return (
       <Animated.View 
@@ -423,15 +644,17 @@ export default function StoryReader() {
         ]}
       >
         <RNText style={styles.nextChapterText}>
-          {story?.chapters[currentChapterIndex + 1]?.title}
+          {story?.chapters[nextChapterIndex]?.title}
         </RNText>
         <MaterialIcons 
-          name="keyboard-arrow-down" 
+          name={isNextChapterLocked ? "lock" : "keyboard-arrow-down"} 
           size={32} 
           color={colorScheme === 'dark' ? '#4a9eff' : '#2b7de9'} 
         />
         <RNText style={styles.nextChapterInstructions}>
-          Scroll down to continue
+          {isNextChapterLocked 
+            ? "Costs 5 coins to unlock" 
+            : "Scroll down to continue"}
         </RNText>
       </Animated.View>
     );
@@ -474,7 +697,13 @@ export default function StoryReader() {
                       borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
                     },
                   ]}
-                  onPress={() => handleChoice(segment, choice)}
+                  onPress={(e) => {
+                    // Prevent event propagation
+                    e.stopPropagation();
+                    // Handle choice after preventing propagation
+                    handleChoice(segment, choice);
+                  }}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.choiceText}>
                     {choice}
@@ -542,7 +771,10 @@ export default function StoryReader() {
             style={styles.scrollView}
             contentContainerStyle={styles.contentContainer}
             onScroll={handleScroll}
-            scrollEventThrottle={16}
+            scrollEventThrottle={100}
+            overScrollMode="always"
+            bounces={true}
+            scrollEnabled={!isAnimating}
           >
             <Text style={styles.chapterTitle}>
               {currentChapter?.title}
@@ -653,7 +885,8 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     padding: 20,
-    paddingBottom: 40,
+    paddingBottom: 60,
+    paddingTop: 20,
   },
   contentWrapper: {
     flex: 1,
