@@ -29,6 +29,8 @@ import {
   View as RNView,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Keyboard,
+  TouchableWithoutFeedback
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Text, View } from '@/components/Themed';
@@ -595,33 +597,35 @@ export default function StoryReader() {
 
   const renderFirstPage = () => {
     return (
-      <View style={styles.firstPageContainer}>
-        <Text style={styles.storyTitle}>
-          Welcome to {story?.title}
-        </Text>
-        <Text style={styles.namePrompt}>
-          Before we begin your adventure, what shall we call you?
-        </Text>
-        <TextInput
-          style={[
-            styles.nameInput,
-            { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
-          ]}
-          value={characterName}
-          onChangeText={setCharacterName}
-          placeholder="Enter your name"
-          placeholderTextColor="#666"
-        />
-        <TouchableOpacity
-          style={[
-            styles.startButton,
-            { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
-          ]}
-          onPress={handleStartReading}
-        >
-          <Text style={styles.startButtonText}>Begin</Text>
-        </TouchableOpacity>
-      </View>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <View style={styles.firstPageContainer}>
+          <Text style={styles.storyTitle}>
+            Welcome to {story?.title}
+          </Text>
+          <Text style={styles.namePrompt}>
+            Before we begin your adventure, what shall we call you?
+          </Text>
+          <TextInput
+            style={[
+              styles.nameInput,
+              { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+            ]}
+            value={characterName}
+            onChangeText={setCharacterName}
+            placeholder="Enter your name"
+            placeholderTextColor="#666"
+          />
+          <TouchableOpacity
+            style={[
+              styles.startButton,
+              { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+            ]}
+            onPress={handleStartReading}
+          >
+            <Text style={styles.startButtonText}>Begin</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableWithoutFeedback>
     );
   };
 
