@@ -9,6 +9,7 @@
  * - Animated text transitions
  * - Dark/light mode theming
  * - Registration requirement after the first chapter
+ * - Continuous scrolling with chapters appended to the bottom
  *
  * Story content is structured into chapters with segments that can be text or decision points.
  * The first page always prompts for the character's name which is then used throughout the story.
@@ -54,18 +55,15 @@ export default function StoryReader() {
   const { id, initialChapter } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
+  const [loadedChapters, setLoadedChapters] = useState<number[]>([]);
   const [isFirstPage, setIsFirstPage] = useState(true);
   const [characterName, setCharacterName] = useState('');
   const [storySegments, setStorySegments] = useState<any[]>([]);
-  const [isChapterEnd, setIsChapterEnd] = useState(false);
   const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
-  // Remove the direction tracking and use a more reliable approach
   const [lastScrollAction, setLastScrollAction] = useState<number>(0);
-  // Track scroll position consistently
-  const [isAtTop, setIsAtTop] = useState<boolean>(false);
   const [isAtBottom, setIsAtBottom] = useState<boolean>(false);
   
   // Add animation values
@@ -113,7 +111,7 @@ export default function StoryReader() {
         // Skip the character name input screen
         if (isFirstPage) {
           setIsFirstPage(false);
-          loadChapterSegments(chapterIndexToNavigate);
+          loadChapterContent(chapterIndexToNavigate);
         }
       }
     }
@@ -179,47 +177,51 @@ export default function StoryReader() {
     }
   }, [story?.title]);
 
-  const loadChapterSegments = (chapterIndex: number, maxSegmentIndex?: number) => {
+  const loadChapterContent = (chapterIndex: number) => {
     if (!story || !story.chapters[chapterIndex]) return;
     
+    // If we've already loaded this chapter, don't duplicate it
+    if (loadedChapters.includes(chapterIndex)) {
+      return;
+    }
+    
     const chapter = story.chapters[chapterIndex];
-    const segments = [];
+    let newSegments = [];
     
-    // Determine how many segments to load
-    let endIndex = maxSegmentIndex !== undefined 
-      ? maxSegmentIndex 
-      : chapter.segments.length;
+    // Always add the chapter title as the first item for this chapter
+    let stopAtDecisionPoint = false;
     
-    // If no max index specified, load segments until we hit a decision point or the end
-    if (maxSegmentIndex === undefined) {
-      for (let i = 0; i < chapter.segments.length; i++) {
-        segments.push({
-          ...chapter.segments[i],
-          index: i
-        });
-        
-        // Stop if we hit a decision point
-        if (chapter.segments[i].type === 'decisionPoint') {
-          endIndex = i;
-          break;
-        }
-      }
-    } else {
-      // Load up to the specified max index
-      for (let i = 0; i <= endIndex; i++) {
-        segments.push({
-          ...chapter.segments[i],
-          index: i
-        });
+    // Process the segments of the chapter
+    for (let i = 0; i < chapter.segments.length; i++) {
+      // Add this segment
+      newSegments.push({
+        ...chapter.segments[i],
+        index: i,
+        chapterIndex: chapterIndex,
+        chapterTitle: chapter.title
+      });
+      
+      // Stop loading content after the first decision point
+      if (chapter.segments[i].type === 'decisionPoint') {
+        stopAtDecisionPoint = true;
+        break;
       }
     }
     
-    setStorySegments(segments);
+    // Append the new segments to the existing ones
+    setStorySegments(prevSegments => [...prevSegments, ...newSegments]);
     
-    // Check if we're at the end of the chapter
-    if (endIndex === chapter.segments.length - 1) {
-      setIsChapterEnd(true);
-      // Show the "Next Chapter" indicator with animation
+    // Add this chapter to the list of loaded chapters
+    setLoadedChapters(prev => [...prev, chapterIndex]);
+    
+    // Update current chapter index if this is the most recent chapter
+    if (chapterIndex > currentChapterIndex) {
+      setCurrentChapterIndex(chapterIndex);
+    }
+    
+    // Show the "Next Chapter" indicator if there are more chapters and we've reached the end of content
+    // Only show it if we didn't stop at a decision point (meaning we reached the end of the chapter)
+    if (hasNextChapter && chapterIndex === currentChapterIndex && !stopAtDecisionPoint) {
       setTimeout(() => {
         Animated.timing(nextChapterFadeAnim, {
           toValue: 1,
@@ -227,9 +229,6 @@ export default function StoryReader() {
           useNativeDriver: true,
         }).start();
       }, 500);
-    } else {
-      setIsChapterEnd(false);
-      nextChapterFadeAnim.setValue(0);
     }
   };
 
@@ -293,80 +292,48 @@ export default function StoryReader() {
     }
   };
 
-  // Modified handleNextChapter with coin check
-  const handleNextChapter = async () => {
-    if (hasNextChapter) {
-      const nextChapterIndex = currentChapterIndex + 1;
-      
-      // Check if chapter needs to be unlocked
-      if (isChapterLocked(nextChapterIndex)) {
-        Alert.alert(
-          'Unlock Chapter',
-          `This chapter costs 5 coins to unlock. Do you want to continue?`,
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-            },
-            {
-              text: 'Unlock',
-              onPress: async () => {
-                const unlocked = await unlockChapter(nextChapterIndex);
-                if (unlocked) {
-                  // Continue with chapter navigation
-                  setCurrentChapterIndex(nextChapterIndex);
-                  animateContentChange(() => {
-                    setIsChapterEnd(false);
-                    loadChapterSegments(nextChapterIndex);
-                    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-                  });
-                }
-              },
-            },
-          ]
-        );
-        return;
-      }
-      
-      // If chapter is free or already unlocked, proceed normally
-      setCurrentChapterIndex(nextChapterIndex);
-      animateContentChange(() => {
-        setIsChapterEnd(false);
-        loadChapterSegments(nextChapterIndex);
-        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-      });
-    }
-  };
-
-  // Modified handleScroll with coin check for next chapter
+  // Modified handleScroll to load next chapter when reaching bottom
   const handleScroll = async (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
     
     // Don't process scroll events during animations or choice handling
     if (isAnimating) return;
     
-    // First, just track the scroll position without taking action
+    // Check if we're near the bottom of the content
     const paddingToBottom = 20;
     const atBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
     
-    // Add a small threshold for top detection to prevent accidental triggers
-    // Only consider "at top" if we're really at the top (not just close)
-    const atTop = contentOffset.y <= 5; // Slightly more forgiving threshold for top detection
-    
     // Update position state
     setIsAtBottom(atBottom);
-    setIsAtTop(atTop);
     
-    // Don't proceed with navigation logic if we're not at chapter end
-    if (atBottom && isChapterEnd && hasNextChapter) {
+    // Check if we should load the next chapter
+    if (atBottom && hasNextChapter) {
       // Only navigate if we've been at the bottom for a moment (prevents accidental triggers)
       const now = Date.now();
-      if (now - lastScrollAction < 800) return;  // Increased from 600 to 800ms for more safety
+      if (now - lastScrollAction < 800) return;
       
       // Set timestamp to prevent rapid navigation
       setLastScrollAction(now);
       
-      // Rest of next chapter navigation code
+      // Find the last segment's chapter and index
+      if (storySegments.length === 0) return;
+      
+      const lastSegment = storySegments[storySegments.length - 1];
+      const lastChapterIndex = lastSegment.chapterIndex;
+      const lastSegmentIndex = lastSegment.index;
+      
+      // Only proceed if we're at the end of a chapter
+      if (lastChapterIndex !== currentChapterIndex) return;
+      
+      const chapter = story?.chapters[lastChapterIndex];
+      if (!chapter || !chapter.segments) return;
+      
+      // If we're not at the end of the chapter or we're at a decision point that hasn't been answered, don't load next chapter
+      const isLastSegmentOfChapter = lastSegmentIndex === chapter.segments.length - 1;
+      const isAtUnansweredDecision = lastSegment.type === 'decisionPoint' && !lastSegment.selectedChoice;
+      
+      if (!isLastSegmentOfChapter || isAtUnansweredDecision) return;
+      
       const nextChapterIndex = currentChapterIndex + 1;
       
       // Check if chapter needs to be unlocked
@@ -384,13 +351,8 @@ export default function StoryReader() {
               onPress: async () => {
                 const unlocked = await unlockChapter(nextChapterIndex);
                 if (unlocked) {
-                  // Continue with chapter navigation
-                  setCurrentChapterIndex(nextChapterIndex);
-                  animateContentChange(() => {
-                    setIsChapterEnd(false);
-                    loadChapterSegments(nextChapterIndex);
-                    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-                  });
+                  // Load the next chapter and append it
+                  loadChapterContent(nextChapterIndex);
                 }
               },
             },
@@ -399,41 +361,8 @@ export default function StoryReader() {
         return;
       }
       
-      // If chapter is free or already unlocked, proceed normally
-      setCurrentChapterIndex(nextChapterIndex);
-      
-      // Load segments from the next chapter with animation
-      animateContentChange(() => {
-        setIsChapterEnd(false);
-        loadChapterSegments(nextChapterIndex);
-        
-        // Scroll to the top for the new chapter
-        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-      });
-    }
-    // Separate condition for previous chapter
-    else if (atTop && hasPreviousChapter && contentOffset.y <= 0) {
-      // Check if user is actively pulling down at the top (for previous chapter)
-      // Add a slight delay to ensure this is intentional
-      const now = Date.now();
-      if (now - lastScrollAction < 800) return; // Use the same delay as next chapter navigation
-      
-      // Set timestamp to prevent rapid navigation
-      setLastScrollAction(now);
-      
-      const prevChapterIndex = currentChapterIndex - 1;
-      setCurrentChapterIndex(prevChapterIndex);
-      
-      // Load segments from the previous chapter with animation
-      animateContentChange(() => {
-        loadChapterSegments(prevChapterIndex);
-        setIsChapterEnd(true); // Set to true to position at the end of the previous chapter
-        
-        // Scroll to the bottom of the previous chapter after it's loaded
-        setTimeout(() => {
-          scrollViewRef.current?.scrollToEnd({ animated: false });
-        }, 100);
-      });
+      // If chapter is free or already unlocked, load it
+      loadChapterContent(nextChapterIndex);
     }
   };
 
@@ -444,8 +373,7 @@ export default function StoryReader() {
       
       // Load segments from the previous chapter with animation
       animateContentChange(() => {
-        setIsChapterEnd(true); // Set to true since we're loading a complete chapter
-        loadChapterSegments(prevChapterIndex);
+        loadChapterContent(prevChapterIndex);
         
         // Scroll to the top for the new chapter
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
@@ -490,45 +418,56 @@ export default function StoryReader() {
   };
 
   const handleChoice = (segment: any, choice: string) => {
-    // Set a flag to prevent scroll handling immediately after choice selection
+    // Don't allow multiple selections
+    if (segment.selectedChoice) return;
+    
+    // Set animation state to prevent scroll events during transition
     setIsAnimating(true);
     
-    // Update the segment with the selected choice
+    // Get the selected choice response and create a complete response segment
+    const response = segment.responses?.[choice] || `You chose: ${choice}`;
+    
+    // Update the decision segment to show the chosen response
     const updatedSegments = storySegments.map(s => {
-      if (s.index === segment.index) {
+      if (s.index === segment.index && s.chapterIndex === segment.chapterIndex) {
         return {
           ...s,
           selectedChoice: choice,
-          showResponse: true
+          response: response,
+          showResponse: true,
         };
       }
       return s;
     });
     
+    // Set the updated segments with the selected choice
     setStorySegments(updatedSegments);
     
-    // Show the response with animation
+    // Animate the response appearing
     Animated.timing(responseFadeAnim, {
       toValue: 1,
-      duration: 500,
+      duration: 600,
       useNativeDriver: true,
+      easing: Easing.out(Easing.ease),
     }).start();
     
     // After a brief delay, load the next segments
     setTimeout(() => {
-      if (currentChapter) {
+      if (currentChapter && currentChapter.segments) {
         const lastSegmentIndex = segment.index;
         
         // Check if there are more segments in the chapter
-        if (lastSegmentIndex < currentChapter.segments.length - 1) {
+        if (lastSegmentIndex < (currentChapter.segments?.length ?? 0) - 1) {
           // Load segments until the next decision point or end of chapter
           const nextSegments = [...updatedSegments];
           let foundNextDecisionPoint = false;
           
-          for (let i = lastSegmentIndex + 1; i < currentChapter.segments.length; i++) {
+          for (let i = lastSegmentIndex + 1; i < (currentChapter.segments?.length ?? 0); i++) {
             const nextSegment = {
               ...currentChapter.segments[i],
-              index: i
+              index: i,
+              chapterIndex: currentChapterIndex,
+              chapterTitle: currentChapter.title
             };
             
             nextSegments.push(nextSegment);
@@ -540,9 +479,12 @@ export default function StoryReader() {
             }
           }
           
-          // Check if we're at the end of the chapter
-          if (nextSegments[nextSegments.length - 1].index === currentChapter.segments.length - 1) {
-            setIsChapterEnd(true);
+          // Check if this is the last segment and we have more chapters
+          const isLastSegment = nextSegments.length > 0 && 
+            (currentChapter.segments?.length ?? 0) > 0 && 
+            nextSegments[nextSegments.length - 1].index === (currentChapter.segments?.length ?? 0) - 1;
+            
+          if (isLastSegment && hasNextChapter) {
             // Show the "Next Chapter" indicator with animation
             setTimeout(() => {
               Animated.timing(nextChapterFadeAnim, {
@@ -561,26 +503,12 @@ export default function StoryReader() {
               scrollViewRef.current?.scrollToEnd({ animated: true });
             }, 300);
           }
-        } else {
-          // We're at the end of the chapter, show the "next chapter" indicator
-          setIsChapterEnd(true);
-          
-          // Show the "Next Chapter" indicator with animation
-          setTimeout(() => {
-            Animated.timing(nextChapterFadeAnim, {
-              toValue: 1,
-              duration: 800,
-              useNativeDriver: true,
-            }).start();
-          }, 500);
         }
       }
-
-      // Allow scroll handling again after content is updated and scrolled
-      setTimeout(() => {
-        setIsAnimating(false);
-      }, 1000);
-    }, 500);
+      
+      // Reset animation state to allow scrolling again
+      setIsAnimating(false);
+    }, 800);
   };
 
   const handleStartReading = () => {
@@ -592,38 +520,41 @@ export default function StoryReader() {
     // Move from name input screen to first actual segment
     animateContentChange(() => {
       setIsFirstPage(false);
-      loadChapterSegments(currentChapterIndex);
+      loadChapterContent(0);
     });
   };
 
   const renderFirstPage = () => {
+    if (!story) return null;
+    
     return (
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View style={styles.firstPageContainer}>
-          <Text style={styles.storyTitle}>
-            Welcome to {story?.title}
-          </Text>
-          <Text style={styles.namePrompt}>
-            Before we begin your adventure, what shall we call you?
-          </Text>
+          <Text style={styles.storyTitle}>{story.title}</Text>
+          <Text style={styles.namePrompt}>What is your name?</Text>
           <TextInput
             style={[
               styles.nameInput,
-              { borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+              {
+                borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
+                color: colorScheme === 'dark' ? '#fff' : '#000',
+              },
             ]}
             value={characterName}
             onChangeText={setCharacterName}
             placeholder="Enter your name"
-            placeholderTextColor="#666"
+            placeholderTextColor="#999"
+            autoCapitalize="words"
+            autoFocus
           />
           <TouchableOpacity
             style={[
               styles.startButton,
-              { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
+              { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' },
             ]}
             onPress={handleStartReading}
           >
-            <Text style={styles.startButtonText}>Begin</Text>
+            <Text style={styles.startButtonText}>Start Reading</Text>
           </TouchableOpacity>
         </View>
       </TouchableWithoutFeedback>
@@ -631,7 +562,18 @@ export default function StoryReader() {
   };
 
   const renderNextChapterIndicator = () => {
-    if (!isChapterEnd || !hasNextChapter) return null;
+    if (!hasNextChapter || !storySegments.length) return null;
+    
+    // Find the last segment's chapter index
+    const lastSegment = storySegments[storySegments.length - 1];
+    const lastChapterIndex = lastSegment.chapterIndex;
+    
+    // Don't show indicator if we're not at the last loaded chapter
+    if (lastChapterIndex !== currentChapterIndex) return null;
+
+    // Check if we're at the end of the chapter
+    const isLastSegmentOfChapter = lastSegment.index === (currentChapter?.segments?.length ?? 0) - 1;
+    if (!isLastSegmentOfChapter) return null;
     
     const nextChapterIndex = currentChapterIndex + 1;
     const isNextChapterLocked = isChapterLocked(nextChapterIndex);
@@ -660,76 +602,114 @@ export default function StoryReader() {
     );
   };
 
+  // Modified to group segments by chapter and display chapter headers
   const renderSegment = (segment: any) => {
+    // Render chapter title at the beginning of each chapter's segments
+    const isFirstSegmentInChapter = segment.index === 0;
+    const chapterTitle = isFirstSegmentInChapter ? (
+      <View style={styles.chapterHeaderContainer}>
+        <Text style={styles.chapterHeader}>
+          {segment.chapterTitle}
+        </Text>
+      </View>
+    ) : null;
+
     if (segment.type === 'text') {
       const processedContent = segment.content?.replace(
-        /({characterName}|{YN})/g,
+        /({characterName}|{YN}|{character})/g, 
         characterName
       ) || '';
 
       return (
-        <RNView key={`text-${segment.index}`} style={styles.textSegment}>
-          <RNText style={{
-            fontSize: 18,
-            color: colorScheme === 'dark' ? '#fff' : '#000'
-          }}>
-            {processedContent}
-          </RNText>
-        </RNView>
+        <>
+          {chapterTitle}
+          <View style={styles.textSegment}>
+            <Text style={{
+              fontSize: 18,
+              color: colorScheme === 'dark' ? '#fff' : '#000'
+            }}>
+              {processedContent}
+            </Text>
+          </View>
+        </>
       );
-    }
-
-    if (segment.type === 'decisionPoint') {
+    } else if (segment.type === 'decisionPoint') {
       const hasSelectedChoice = segment.selectedChoice;
       
       return (
-        <RNView key={`decision-${segment.index}`} style={styles.decisionContainer}>
-          {/* Decision choices */}
-          {!hasSelectedChoice && (
-            <RNView style={styles.choicesContainer}>
-              {segment.choices?.map((choice: string) => (
-                <TouchableOpacity
-                  key={choice}
-                  style={[
-                    styles.choiceButton,
-                    {
-                      backgroundColor: 'transparent',
-                      borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
-                    },
-                  ]}
-                  onPress={(e) => {
-                    // Prevent event propagation
-                    e.stopPropagation();
-                    // Handle choice after preventing propagation
-                    handleChoice(segment, choice);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.choiceText}>
-                    {choice}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </RNView>
-          )}
+        <>
+          {chapterTitle}
+          <View style={styles.decisionContainer}>
+            {/* Display decision content */}
+            <Text style={{
+              fontSize: 18,
+              color: colorScheme === 'dark' ? '#fff' : '#000'
+            }}>
+              {segment.content?.replace(/({characterName}|{YN}|{character})/g, characterName)}
+            </Text>
+            
+            {/* Decision choices */}
+            {!hasSelectedChoice && (
+              <View style={styles.choicesContainer}>
+                {segment.choices?.map((choice: string) => (
+                  <TouchableOpacity
+                    key={choice}
+                    style={[
+                      styles.choiceButton,
+                      {
+                        borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
+                      },
+                    ]}
+                    onPress={() => handleChoice(segment, choice)}
+                  >
+                    <Text style={styles.choiceText}>
+                      {choice}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
-          {/* Response after selection */}
-          {hasSelectedChoice && segment.responses && (
-            <Animated.View 
-              style={{ 
-                opacity: responseFadeAnim,
-                marginVertical: 10
-              }}
-            >
-              <Text style={styles.responseText}>
-                {segment.responses[segment.selectedChoice].replace(
-                  /({characterName}|{YN})/g,
-                  characterName
-                )}
-              </Text>
-            </Animated.View>
-          )}
-        </RNView>
+            {/* Response after selection */}
+            {hasSelectedChoice && segment.responses && (
+              <>
+                <View style={styles.choicesContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.choiceButton,
+                      {
+                        backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
+                        borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
+                      },
+                    ]}
+                    disabled={true}
+                  >
+                    <Text
+                      style={[
+                        styles.choiceText,
+                        styles.selectedChoiceText,
+                      ]}
+                    >
+                      {segment.selectedChoice}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <Animated.View
+                  style={{
+                    opacity: responseFadeAnim,
+                  }}
+                >
+                  <Text style={styles.responseText}>
+                    {segment.responses[segment.selectedChoice]?.replace(
+                      /({characterName}|{YN}|{character})/g,
+                      characterName
+                    )}
+                  </Text>
+                </Animated.View>
+              </>
+            )}
+          </View>
+        </>
       );
     }
 
@@ -776,10 +756,7 @@ export default function StoryReader() {
             bounces={true}
             scrollEnabled={!isAnimating}
           >
-            <Text style={styles.chapterTitle}>
-              {currentChapter?.title}
-            </Text>
-            
+            {/* Chapter titles now rendered with each segment group */}
             <Animated.View
               style={[
                 styles.contentWrapper,
@@ -789,7 +766,11 @@ export default function StoryReader() {
                 },
               ]}
             >
-              {storySegments.map(segment => renderSegment(segment))}
+              {storySegments.map((segment, index) => (
+                <React.Fragment key={`${segment.chapterIndex}-${segment.index}`}>
+                  {renderSegment(segment)}
+                </React.Fragment>
+              ))}
             </Animated.View>
             
             {renderNextChapterIndicator()}
@@ -915,5 +896,20 @@ const styles = StyleSheet.create({
     color: 'red',
     textAlign: 'center',
     margin: 24,
+  },
+  chapterHeaderContainer: {
+    marginBottom: 24,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ccc',
+  },
+  chapterHeader: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  storyText: {
+    fontSize: 18,
+    color: '#000',
   },
 }); 
