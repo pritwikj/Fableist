@@ -351,7 +351,7 @@ export default function StoryReader() {
     
     // Add a small threshold for top detection to prevent accidental triggers
     // Only consider "at top" if we're really at the top (not just close)
-    const atTop = contentOffset.y === 0;
+    const atTop = contentOffset.y <= 5; // Slightly more forgiving threshold for top detection
     
     // Update position state
     setIsAtBottom(atBottom);
@@ -412,10 +412,11 @@ export default function StoryReader() {
       });
     }
     // Separate condition for previous chapter
-    else if (atTop && hasPreviousChapter) {
+    else if (atTop && hasPreviousChapter && contentOffset.y <= 0) {
+      // Check if user is actively pulling down at the top (for previous chapter)
       // Add a slight delay to ensure this is intentional
       const now = Date.now();
-      if (now - lastScrollAction < 1000) return; // Increased delay for previous chapter navigation
+      if (now - lastScrollAction < 800) return; // Use the same delay as next chapter navigation
       
       // Set timestamp to prevent rapid navigation
       setLastScrollAction(now);
@@ -425,10 +426,10 @@ export default function StoryReader() {
       
       // Load segments from the previous chapter with animation
       animateContentChange(() => {
-        setIsChapterEnd(true); // Set to true since we're loading a complete chapter
         loadChapterSegments(prevChapterIndex);
+        setIsChapterEnd(true); // Set to true to position at the end of the previous chapter
         
-        // Scroll to the bottom of the previous chapter to position correctly
+        // Scroll to the bottom of the previous chapter after it's loaded
         setTimeout(() => {
           scrollViewRef.current?.scrollToEnd({ animated: false });
         }, 100);
@@ -771,8 +772,8 @@ export default function StoryReader() {
             contentContainerStyle={styles.contentContainer}
             onScroll={handleScroll}
             scrollEventThrottle={100}
-            overScrollMode="never"
-            bounces={isChapterEnd || hasPreviousChapter}
+            overScrollMode="always"
+            bounces={true}
             scrollEnabled={!isAnimating}
           >
             <Text style={styles.chapterTitle}>
@@ -884,7 +885,8 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     padding: 20,
-    paddingBottom: 40,
+    paddingBottom: 60,
+    paddingTop: 20,
   },
   contentWrapper: {
     flex: 1,
