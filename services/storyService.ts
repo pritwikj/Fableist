@@ -29,6 +29,7 @@ export interface UserStoryProgress {
   lastReadTimestamp: Timestamp;
   unlockedChapters?: number[]; // List of unlocked chapter indices
   chapterHistory?: Record<string, any>; // History of decisions made in chapters
+  characterName?: string; // User's custom character name for this story
 }
 
 /**
@@ -37,6 +38,7 @@ export interface UserStoryProgress {
 export interface LibraryStory extends StoryMetadata {
   currentChapter: number | string; // Can be number or string for backward compatibility
   lastReadTimestamp: Timestamp;
+  characterName?: string; // User's custom character name for this story
 }
 
 /**
@@ -183,6 +185,7 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
         // For backward compatibility, if only currentPage exists but no currentChapter
         ...(data.hasOwnProperty('currentPage') && !data.hasOwnProperty('currentChapter') && { currentChapter: "0" }),
         lastReadTimestamp: data.lastReadTimestamp || Timestamp.now(),
+        characterName: data.characterName, // Include character name if available
         docId: doc.id
       };
     });
@@ -199,6 +202,7 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
             ...metadata,
             currentChapter: progress.currentChapter,
             lastReadTimestamp: progress.lastReadTimestamp,
+            characterName: progress.characterName, // Include character name in the returned data
           };
         } catch (error) {
           console.error(`Error fetching metadata for story ${progress.storyId}:`, error);
@@ -214,6 +218,7 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
             defaultCharacterName: "Reader",
             currentChapter: progress.currentChapter,
             lastReadTimestamp: progress.lastReadTimestamp,
+            characterName: progress.characterName, // Include character name in the returned data
           };
         }
       })

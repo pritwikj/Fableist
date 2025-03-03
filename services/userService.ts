@@ -33,6 +33,7 @@ export interface LibraryItem {
   lastReadTimestamp: Timestamp;
   story?: StoryMetadata; // Joined story data
   unlockedChapters?: number[]; // Track which chapters are unlocked
+  characterName?: string; // User's custom character name for this story
 }
 
 /**

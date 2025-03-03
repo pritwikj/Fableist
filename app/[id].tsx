@@ -104,17 +104,10 @@ export default function StoryReader() {
   const hasNextChapter = story && currentChapterIndex < story.chapters.length - 1;
   const hasPreviousChapter = story && currentChapterIndex > 0;
 
-  useEffect(() => {
-    if (story) {
-      setCharacterName(story.defaultCharacterName);
-    }
-  }, [story]);
-
   // Load the story content and user progress
   useEffect(() => {
     if (story && !isLoading) {
       console.log("STORY LOADED, PREPARING TO HANDLE USER PROGRESS");
-      setCharacterName(story.defaultCharacterName);
       
       // Convert initialChapter to number safely
       const initChapter = initialChapter 
@@ -171,29 +164,51 @@ export default function StoryReader() {
                 // Set the formatted decision history
                 setDecisionHistory(formattedHistory);
                 
-                // Check if we need to load previous chapters
-                if (initChapter > 0) {
-                  // Load all chapters up to and including the current one
-                  for (let i = 0; i <= initChapter; i++) {
-                    // Check if chapter should be loaded
-                    if (!loadedChapters.includes(i) && i < story.chapters.length) {
-                      console.log(`LOADING CHAPTER ${i} FROM LIBRARY PROGRESS`);
-                      loadChapterContent(i);
-                    }
-                  }
+                // Get the saved character name if available
+                if (data.characterName) {
+                  console.log('FOUND SAVED CHARACTER NAME:', data.characterName);
+                  setCharacterName(data.characterName);
                   
-                  // Set flag to scroll to saved position once chapters are loaded
-                  setIsNavigatingToSavedPosition(true);
+                  // Skip the character name input screen if we have a saved name
+                  setIsFirstPage(false);
+                  
+                  // Get current chapter from user progress to load content
+                  const startChapter = data.currentChapter !== undefined ? 
+                    (typeof data.currentChapter === 'string' ? parseInt(data.currentChapter, 10) : data.currentChapter) : 0;
+                  
+                  // Set the current chapter index
+                  setCurrentChapterIndex(startChapter);
+                  
+                  // Load ALL chapters up to and including the current chapter
+                  console.log(`LOADING ALL CHAPTERS UP TO ${startChapter} FROM USER PROGRESS`);
+                  
+                  // Reset the story segments array and loaded chapters since we're loading from scratch
+                  setStorySegments([]);
+                  setLoadedChapters([]);
+                  
+                  // Loop through all chapters from 0 to startChapter and load each one
+                  // We do this with a small delay between chapters to ensure they load in order
+                  for (let i = 0; i <= startChapter && i < story.chapters.length; i++) {
+                    // Use setTimeout with increasing delays to ensure chapters load in order
+                    // This helps avoid race conditions with state updates
+                    setTimeout(() => {
+                      console.log(`LOADING CHAPTER ${i} AS PART OF RESTORE`);
+                      loadChapterContent(i);
+                      
+                      // When we reach the last chapter, set the navigation flag to scroll to the right position
+                      if (i === startChapter) {
+                        setIsNavigatingToSavedPosition(true);
+                      }
+                    }, i * 50); // 50ms delay between each chapter load
+                  }
                 } else {
-                  // Just load the first chapter
-                  console.log('LOADING FIRST CHAPTER FROM LIBRARY PROGRESS');
-                  loadChapterContent(0);
+                  // No saved character name, use default but stay on first page
+                  setCharacterName(story.defaultCharacterName);
                 }
               } else {
-                // No progress, start from the beginning
-                console.log('NO LIBRARY PROGRESS FOUND, STARTING FROM BEGINNING');
-                setDecisionHistory({}); // Initialize empty decision history
-                loadChapterContent(0);
+                // No library entry exists yet, use default character name
+                setCharacterName(story.defaultCharacterName);
+                // We'll let the handleStartReading function handle loading chapter content when user clicks Start
               }
             }
           } catch (error) {
@@ -206,6 +221,8 @@ export default function StoryReader() {
           // User not authenticated, just load the specified chapter
           console.log('USER NOT AUTHENTICATED, LOADING WITHOUT PROGRESS');
           setDecisionHistory({}); // Initialize empty decision history
+          // Set default character name for unauthenticated users
+          setCharacterName(story.defaultCharacterName);
           if (initChapter > 0 && initChapter < story.chapters.length) {
             loadChapterContent(initChapter);
           } else {
@@ -214,15 +231,15 @@ export default function StoryReader() {
         }
       };
       
-      if (!isFirstPage) {
-        // Load user progress if not on the first (name input) page
-        loadUserProgress();
-      } else {
-        // Initialize empty decision history on first page
+      // Always load user progress to check for saved character name
+      loadUserProgress();
+      
+      // Initialize empty decision history on first page if needed
+      if (isFirstPage) {
         setDecisionHistory({});
       }
     }
-  }, [story, isLoading, isFirstPage, id, initialChapter]);
+  }, [story, isLoading, id, initialChapter]);
 
   // Scroll to the appropriate position when navigating from library
   useEffect(() => {
@@ -349,6 +366,17 @@ export default function StoryReader() {
       });
     }
   }, [story?.title]);
+
+  // Add diagnostic logging to help debug blank screen issues
+  useEffect(() => {
+    console.log('STORY READER STATE:', {
+      isFirstPage,
+      storySegmentsCount: storySegments.length,
+      characterName,
+      currentChapterIndex,
+      loadedChapters
+    });
+  }, [isFirstPage, storySegments.length, characterName, currentChapterIndex, loadedChapters]);
 
   const loadChapterContent = (chapterIndex: number) => {
     if (!story || !story.chapters[chapterIndex]) return;
@@ -843,11 +871,47 @@ export default function StoryReader() {
       return;
     }
     
+    // Save the character name to Firestore
+    saveCharacterNameToFirestore();
+    
     // Move from name input screen to first actual segment
     animateContentChange(() => {
       setIsFirstPage(false);
       loadChapterContent(0);
     });
+  };
+
+  // Save character name to Firestore
+  const saveCharacterNameToFirestore = async () => {
+    if (isAuthenticated() && story) {
+      try {
+        const userId = getCurrentUser()?.uid;
+        if (userId) {
+          const libraryDocRef = doc(db, 'users', userId, 'userLibrary', story.id);
+          const libraryDoc = await getDoc(libraryDocRef);
+          
+          if (libraryDoc.exists()) {
+            // Update existing document with character name
+            await updateDoc(libraryDocRef, {
+              characterName: characterName,
+              lastReadTimestamp: serverTimestamp()
+            });
+          } else {
+            // Create new document with character name
+            await setDoc(libraryDocRef, {
+              storyId: story.id,
+              characterName: characterName,
+              currentChapter: 0,
+              lastReadTimestamp: serverTimestamp(),
+              userChoices: []
+            });
+          }
+          console.log('Successfully saved character name to Firestore');
+        }
+      } catch (error) {
+        console.error('Failed to save character name to Firestore:', error);
+      }
+    }
   };
 
   const renderFirstPage = () => {
