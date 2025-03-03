@@ -144,6 +144,9 @@ export default function StoryReader() {
                 // Extract user choices from the Firestore data format
                 const userChoices = data.userChoices || [];
                 
+                // DIAGNOSTIC: Log all user choices retrieved
+                console.log('DEBUG: ALL USER CHOICES FROM FIRESTORE:', JSON.stringify(userChoices, null, 2));
+                
                 // Convert array of choices to the format our app expects (key-value pairs)
                 const formattedHistory: Record<string, any> = {};
                 
@@ -157,12 +160,17 @@ export default function StoryReader() {
                     segmentIndex: choice.segmentIndex,
                     timestamp: choice.timestamp || new Date().getTime()
                   };
+                  // DIAGNOSTIC: Log each choice as it's processed
+                  console.log(`DEBUG: Processed choice for key ${key}:`, formattedHistory[key]);
                 });
                 
                 console.log('CONVERTED USER CHOICES TO FORMATTED HISTORY:', formattedHistory);
                 
+                // Set the formatted decision history in React state
+                // Note: This is asynchronous and may not be available immediately!
                 // Set the formatted decision history
                 setDecisionHistory(formattedHistory);
+                console.log('DEBUG: setDecisionHistory called with', Object.keys(formattedHistory).length, 'entries');
                 
                 // Get the saved character name if available
                 if (data.characterName) {
@@ -186,21 +194,53 @@ export default function StoryReader() {
                   setStorySegments([]);
                   setLoadedChapters([]);
                   
-                  // Loop through all chapters from 0 to startChapter and load each one
-                  // We do this with a small delay between chapters to ensure they load in order
-                  for (let i = 0; i <= startChapter && i < story.chapters.length; i++) {
-                    // Use setTimeout with increasing delays to ensure chapters load in order
-                    // This helps avoid race conditions with state updates
-                    setTimeout(() => {
-                      console.log(`LOADING CHAPTER ${i} AS PART OF RESTORE`);
-                      loadChapterContent(i);
+                  // IMPORTANT: Make sure decision history is available before loading chapters
+                  // This ensures isPreviouslyReadChapter is correctly evaluated
+                  setTimeout(() => {
+                    // DIAGNOSTIC: Check if decision history is populated at this point
+                    console.log('DEBUG [before loading chapters]: Current decision history state:', 
+                      Object.keys(decisionHistory).length, 'entries');
+                    console.log('DEBUG [before loading chapters]: Decision history keys:', 
+                      Object.keys(decisionHistory));
                       
-                      // When we reach the last chapter, set the navigation flag to scroll to the right position
-                      if (i === startChapter) {
-                        setIsNavigatingToSavedPosition(true);
-                      }
-                    }, i * 50); // 50ms delay between each chapter load
-                  }
+                    // CRITICAL DIAGNOSTIC: Create a local reference to decision history before loading chapters
+                    const currentDecisionHistory = {...decisionHistory};
+                    console.log('DEBUG [CRITICAL] Local copy of decision history before loading chapters:', {
+                      keysCount: Object.keys(currentDecisionHistory).length,
+                      keys: Object.keys(currentDecisionHistory)
+                    });
+                    
+                    // IMPORTANT: We'll use the direct formattedHistory object rather than relying on React state
+                    console.log('DEBUG [CRITICAL FIX] Using direct history reference with', 
+                      Object.keys(formattedHistory).length, 'entries');
+                    
+                    // Loop through all chapters from 0 to startChapter and load each one
+                    // We do this with a small delay between chapters to ensure they load in order
+                    for (let i = 0; i <= startChapter && i < story.chapters.length; i++) {
+                      // Use setTimeout with increasing delays to ensure chapters load in order
+                      // This helps avoid race conditions with state updates
+                      setTimeout(() => {
+                        console.log(`LOADING CHAPTER ${i} AS PART OF RESTORE`);
+                        // DIAGNOSTIC: Check decision history right before loading each chapter
+                        console.log(`DEBUG [loading chapter ${i}]: Current decision history:`, 
+                          Object.keys(decisionHistory).length, 'entries');
+                        console.log(`DEBUG [CRITICAL] Chapter ${i} load - Reference check:`, {
+                          reactStateKeys: Object.keys(decisionHistory).length,
+                          localCopyKeys: Object.keys(currentDecisionHistory).length,
+                          directHistoryKeys: Object.keys(formattedHistory).length,
+                          areEqual: JSON.stringify(Object.keys(decisionHistory)) === JSON.stringify(Object.keys(currentDecisionHistory))
+                        });
+                        
+                        // CRITICAL FIX: Use the direct formatted history instead of React state
+                        loadChapterContentWithHistory(i, formattedHistory);
+                        
+                        // When we reach the last chapter, set the navigation flag to scroll to the right position
+                        if (i === startChapter) {
+                          setIsNavigatingToSavedPosition(true);
+                        }
+                      }, i * 200); // Increased delay between each chapter load for debugging
+                    }
+                  }, 300); // Increased delay to ensure decision history is set first
                 } else {
                   // No saved character name, use default but stay on first page
                   setCharacterName(story.defaultCharacterName);
@@ -331,6 +371,12 @@ export default function StoryReader() {
     }
   }, [isNavigatingToSavedPosition, initialChapter, storySegments, decisionHistory]);
 
+  // DIAGNOSTIC: Add an effect to monitor decision history changes
+  useEffect(() => {
+    console.log('DEBUG [decisionHistory changed]: Now has', Object.keys(decisionHistory).length, 'entries');
+    console.log('DEBUG [decisionHistory changed]: Keys:', Object.keys(decisionHistory));
+  }, [decisionHistory]);
+  
   // Update reading progress when chapter changes
   useEffect(() => {
     if (isAuthenticated() && story && currentChapter && !isFirstPage) {
@@ -378,8 +424,160 @@ export default function StoryReader() {
     });
   }, [isFirstPage, storySegments.length, characterName, currentChapterIndex, loadedChapters]);
 
+  // CRITICAL FIX: New function that takes history directly instead of relying on React state
+  const loadChapterContentWithHistory = (chapterIndex: number, directHistory: Record<string, any>) => {
+    if (!story || !story.chapters[chapterIndex]) return;
+    
+    console.log(`DIRECT HISTORY LOAD: Chapter ${chapterIndex} with history:`, {
+      historyKeys: Object.keys(directHistory),
+      historyLength: Object.keys(directHistory).length
+    });
+    
+    // If we've already loaded this chapter, don't duplicate it
+    if (loadedChapters.includes(chapterIndex)) {
+      console.log(`CHAPTER ${chapterIndex} ALREADY LOADED, SKIPPING`);
+      return;
+    }
+    
+    const chapter = story.chapters[chapterIndex];
+    let newSegments = [];
+    
+    // Check if this is a previously read chapter from library USING DIRECT HISTORY
+    const chapterHistoryKeys = Object.keys(directHistory).filter(
+      key => key.startsWith(`${chapterIndex}-`)
+    );
+    
+    const isPreviouslyReadChapter = chapterHistoryKeys.length > 0;
+    
+    console.log(`DIRECT HISTORY CHECK: Chapter ${chapterIndex} isPreviouslyReadChapter=${isPreviouslyReadChapter}`, {
+      chapterHistoryKeys,
+      historyKeysCount: chapterHistoryKeys.length,
+      totalHistoryKeys: Object.keys(directHistory).length
+    });
+    
+    // DIAGNOSTICS: Log chapter loading info
+    console.log('LOADING CHAPTER:', {
+      chapterIndex,
+      title: chapter.title,
+      segmentCount: chapter.segments.length,
+      isPreviouslyReadChapter,
+      directHistoryKeyCount: Object.keys(directHistory).length,
+      chapterHistoryKeys
+    });
+    
+    // Always add the chapter title as the first item for this chapter
+    let stopAtDecisionPoint = false;
+    
+    // Process the segments of the chapter
+    for (let i = 0; i < chapter.segments.length; i++) {
+      // Add this segment with any needed additional properties
+      const segment: any = {
+        ...chapter.segments[i],
+        index: i,
+        chapterIndex: chapterIndex,
+        chapterTitle: chapter.title
+      };
+      
+      // Check if this segment has a previous decision in history
+      if (segment.type === 'decisionPoint') {
+        const decisionKey = `${chapterIndex}-${i}`;
+        const historyEntry = directHistory[decisionKey];
+        
+        // DIAGNOSTICS: Log decision point processing
+        console.log('PROCESSING DECISION POINT:', {
+          decisionKey,
+          hasHistoryEntry: !!historyEntry,
+          historyChoice: historyEntry?.choice,
+          historyResponse: historyEntry?.response,
+          segmentContent: segment.content?.substring(0, 30) + '...',
+          choicesCount: segment.choices?.length
+        });
+        
+        if (historyEntry && historyEntry.choice) {
+          // Apply the saved decision to this segment
+          segment.selectedChoice = historyEntry.choice;
+          
+          // If a response is stored in history, prioritize that
+          if (historyEntry.response) {
+            // Keep the original responses object but ensure the chosen response is there
+            if (!segment.responses) {
+              segment.responses = {};
+            }
+            segment.responses[historyEntry.choice] = historyEntry.response;
+            
+            console.log(`USING RESPONSE FROM HISTORY FOR ${decisionKey}:`, historyEntry.response);
+          } 
+          // Otherwise make sure we at least have a default response
+          else if (!segment.responses || !segment.responses[historyEntry.choice]) {
+            if (!segment.responses) {
+              segment.responses = {};
+            }
+            segment.responses[historyEntry.choice] = `You chose: ${historyEntry.choice}`;
+            
+            console.log(`USING DEFAULT RESPONSE FOR ${decisionKey}:`, `You chose: ${historyEntry.choice}`);
+          }
+          
+          console.log('APPLIED HISTORY TO SEGMENT:', {
+            decisionKey,
+            selectedChoice: segment.selectedChoice,
+            hasResponses: !!segment.responses,
+            responseKeys: segment.responses ? Object.keys(segment.responses) : []
+          });
+        } else {
+          console.log(`NO HISTORY FOUND FOR DECISION ${decisionKey}`);
+        }
+      }
+      
+      newSegments.push(segment);
+      
+      // Stop loading content at the first unanswered decision point REGARDLESS of whether the chapter was previously read
+      // This ensures we don't show content past an unanswered decision even in partially-read chapters
+      if (segment.type === 'decisionPoint' && !segment.selectedChoice) {
+        console.log(`STOPPING CHAPTER LOAD AT DECISION POINT: ${chapterIndex}-${i} (in ${isPreviouslyReadChapter ? 'previously read' : 'new'} chapter)`);
+        
+        const decisionKey = `${chapterIndex}-${i}`;
+        console.log(`DIRECT HISTORY DECISION CHECK: ${decisionKey} - hasHistory=${!!directHistory[decisionKey]}`);
+        
+        stopAtDecisionPoint = true;
+        break;
+      }
+    }
+    
+    console.log(`DIRECT LOAD: Chapter ${chapterIndex} - Loading ${newSegments.length} segments, stopped at decision=${stopAtDecisionPoint}`);
+    
+    // Append the new segments to the existing ones
+    setStorySegments(prevSegments => [...prevSegments, ...newSegments]);
+    
+    // Add this chapter to the list of loaded chapters
+    setLoadedChapters(prev => [...prev, chapterIndex]);
+    
+    // Update current chapter index if this is the most recent chapter
+    if (chapterIndex > currentChapterIndex) {
+      setCurrentChapterIndex(chapterIndex);
+    }
+    
+    // Show the "Next Chapter" indicator if there are more chapters and we've reached the end of content
+    // Only show it if we didn't stop at a decision point (meaning we reached the end of the chapter)
+    if (hasNextChapter && chapterIndex === currentChapterIndex && !stopAtDecisionPoint) {
+      setTimeout(() => {
+        Animated.timing(nextChapterFadeAnim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }).start();
+      }, 500);
+    }
+  };
+
   const loadChapterContent = (chapterIndex: number) => {
     if (!story || !story.chapters[chapterIndex]) return;
+    
+    // CRITICAL DIAGNOSTIC: Log the current state at the start of loadChapterContent
+    console.log(`DEBUG [CRITICAL] loadChapterContent(${chapterIndex}) called with decision history:`, {
+      historyKeys: Object.keys(decisionHistory),
+      historyLength: Object.keys(decisionHistory).length,
+      decisionHistoryState: decisionHistory
+    });
     
     // If we've already loaded this chapter, don't duplicate it
     if (loadedChapters.includes(chapterIndex)) {
@@ -397,6 +595,13 @@ export default function StoryReader() {
     
     const isPreviouslyReadChapter = chapterHistoryKeys.length > 0;
     
+    // CRITICAL DIAGNOSTIC: Log the isPreviouslyReadChapter determination
+    console.log(`DEBUG [CRITICAL] Chapter ${chapterIndex} isPreviouslyReadChapter=${isPreviouslyReadChapter}`, {
+      chapterHistoryKeys,
+      historyKeysCount: chapterHistoryKeys.length,
+      totalHistoryKeys: Object.keys(decisionHistory).length
+    });
+    
     // DIAGNOSTICS: Log chapter loading info
     console.log('LOADING CHAPTER:', {
       chapterIndex,
@@ -409,6 +614,22 @@ export default function StoryReader() {
     
     // Always add the chapter title as the first item for this chapter
     let stopAtDecisionPoint = false;
+    
+    // DIAGNOSTIC: Count decision points for this chapter
+    let totalDecisionPoints = 0;
+    let decisionsWithHistory = 0;
+    
+    // Pre-scan to count decisions
+    chapter.segments.forEach((seg, idx) => {
+      if (seg.type === 'decisionPoint') {
+        totalDecisionPoints++;
+        const histKey = `${chapterIndex}-${idx}`;
+        if (decisionHistory[histKey]) {
+          decisionsWithHistory++;
+        }
+      }
+    });
+    console.log(`DEBUG [loadChapterContent ${chapterIndex}]: Chapter has ${totalDecisionPoints} decision points, ${decisionsWithHistory} have history entries`);
     
     // Process the segments of the chapter
     for (let i = 0; i < chapter.segments.length; i++) {
@@ -476,16 +697,31 @@ export default function StoryReader() {
       
       newSegments.push(segment);
       
-      // Stop loading content after the first unanswered decision point
-      // but only if we're not loading a previously read chapter from library
-      if (!isPreviouslyReadChapter && 
-          segment.type === 'decisionPoint' && 
-          !segment.selectedChoice) {
+      // Stop loading content at the first unanswered decision point
+      // CRITICAL UPDATE: Stop at unanswered decisions regardless of previous chapter state
+      if (segment.type === 'decisionPoint' && !segment.selectedChoice) {
         console.log(`STOPPING CHAPTER LOAD AT FIRST UNANSWERED DECISION: ${chapterIndex}-${i}`);
+        console.log(`DEBUG [loadChapterContent ${chapterIndex}]: isPreviouslyReadChapter=${isPreviouslyReadChapter}, has selectedChoice=${!!segment.selectedChoice}`);
+        
+        // CRITICAL DIAGNOSTIC: Log detailed information about the stopping condition
+        console.log(`DEBUG [CRITICAL] STOPPING AT DECISION POINT - Decision details:`, {
+          decisionKey: `${chapterIndex}-${i}`,
+          isPreviouslyReadChapter,
+          hasSelectedChoice: !!segment.selectedChoice,
+          segmentType: segment.type,
+          decisionHistory: Object.keys(decisionHistory),
+          chapterHistoryKeys: Object.keys(decisionHistory).filter(key => key.startsWith(`${chapterIndex}-`)),
+          hasHistoryForThisKey: !!decisionHistory[`${chapterIndex}-${i}`],
+          historyEntryForThisKey: decisionHistory[`${chapterIndex}-${i}`] || 'None'
+        });
+        
         stopAtDecisionPoint = true;
         break;
       }
     }
+    
+    // DIAGNOSTIC: Final check on what we're loading
+    console.log(`DEBUG [loadChapterContent ${chapterIndex}]: Loading ${newSegments.length} segments, stopped at decision=${stopAtDecisionPoint}`);
     
     // Append the new segments to the existing ones
     setStorySegments(prevSegments => [...prevSegments, ...newSegments]);
@@ -816,21 +1052,48 @@ export default function StoryReader() {
           const nextSegments = [...updatedSegments];
           let foundNextDecisionPoint = false;
           
+          // CRITICAL FIX: Use the updated decision history when loading remaining segments
+          // This ensures we correctly recognize decisions that were just made
           for (let i = lastSegmentIndex + 1; i < (currentChapter.segments?.length ?? 0); i++) {
-            const nextSegment = {
+            const nextSegment: any = {
               ...currentChapter.segments[i],
               index: i,
               chapterIndex: currentChapterIndex,
               chapterTitle: currentChapter.title
             };
             
-            nextSegments.push(nextSegment);
-            
-            // Stop if we hit another decision point
+            // Check if this is a decision point that needs to be processed with history
             if (nextSegment.type === 'decisionPoint') {
-              foundNextDecisionPoint = true;
-              break;
+              const nextDecisionKey = `${currentChapterIndex}-${i}`;
+              const historyEntry = updatedHistory[nextDecisionKey]; // Use the updated history
+              
+              if (historyEntry && historyEntry.choice) {
+                console.log(`APPLYING HISTORY TO DECISION POINT DURING CONTINUED LOAD: ${nextDecisionKey}`);
+                nextSegment.selectedChoice = historyEntry.choice;
+                
+                if (historyEntry.response) {
+                  if (!nextSegment.responses) {
+                    nextSegment.responses = {};
+                  }
+                  nextSegment.responses[historyEntry.choice] = historyEntry.response;
+                } else if (!nextSegment.responses || !nextSegment.responses[historyEntry.choice]) {
+                  if (!nextSegment.responses) {
+                    nextSegment.responses = {};
+                  }
+                  nextSegment.responses[historyEntry.choice] = `You chose: ${historyEntry.choice}`;
+                }
+              } else {
+                // This is an unanswered decision point - stop here
+                console.log(`FOUND NEXT UNANSWERED DECISION POINT: ${nextDecisionKey}`);
+                foundNextDecisionPoint = true;
+                
+                // Add this decision point so the user can interact with it
+                nextSegments.push(nextSegment);
+                break;
+              }
             }
+            
+            nextSegments.push(nextSegment);
           }
           
           // Check if this is the last segment and we have more chapters
@@ -849,6 +1112,7 @@ export default function StoryReader() {
             }, 500);
           }
           
+          // Update the segments array with the newly loaded segments
           setStorySegments(nextSegments);
           
           // Scroll down a bit to show new content
