@@ -26,7 +26,7 @@ export const updateReadingProgress = functions.https.onCall(async (data, context
   const userId = context.auth.uid;
 
   // Validate required parameters
-  const { storyId, currentChapter } = data;
+  const { storyId, currentChapter, decisions } = data;
   if (!storyId) {
     throw new functions.https.HttpsError(
       'invalid-argument',
@@ -67,6 +67,9 @@ export const updateReadingProgress = functions.https.onCall(async (data, context
       // Get the current unlocked chapters or initialize empty array
       let unlockedChapters = existingData.unlockedChapters || [];
       
+      // Get existing decision history or initialize empty object
+      let chapterHistory = existingData.chapterHistory || {};
+      
       // First 5 chapters (0-4) are always free
       // If the current chapter is already in unlocked chapters, nothing to add
       if (numericChapter > 4 && !unlockedChapters.includes(numericChapter)) {
@@ -74,10 +77,20 @@ export const updateReadingProgress = functions.https.onCall(async (data, context
         unlockedChapters.push(numericChapter);
       }
       
-      // Update with new data including unlocked chapters
+      // Update chapter history with new decisions if provided
+      if (decisions && typeof decisions === 'object') {
+        // Merge with existing history, preserving previous chapters' decisions
+        chapterHistory = {
+          ...chapterHistory,
+          ...decisions
+        };
+      }
+      
+      // Update with new data including unlocked chapters and decision history
       await libraryItemRef.update({
         ...progressData,
-        unlockedChapters
+        unlockedChapters,
+        chapterHistory
       });
     } else {
       // Create new document with initial unlocked chapters (free + current)
@@ -88,16 +101,23 @@ export const updateReadingProgress = functions.https.onCall(async (data, context
         initialUnlockedChapters.push(numericChapter);
       }
       
-      // Create library item with initial unlocked chapters
+      // Include decision history if provided
+      const initialChapterHistory = decisions && typeof decisions === 'object' ? decisions : {};
+      
+      // Create library item with initial unlocked chapters and decision history
       await libraryItemRef.set({
         ...progressData,
-        unlockedChapters: initialUnlockedChapters
+        unlockedChapters: initialUnlockedChapters,
+        chapterHistory: initialChapterHistory
       });
     }
     
     // Also update the reading progress collection (if it's being used)
     const progressRef = db.doc(`users/${userId}/readingProgress/${storyId}`);
-    await progressRef.set(progressData, { merge: true });
+    await progressRef.set({
+      ...progressData,
+      chapterHistory: decisions && typeof decisions === 'object' ? decisions : {}
+    }, { merge: true });
 
     return { success: true };
   } catch (error) {

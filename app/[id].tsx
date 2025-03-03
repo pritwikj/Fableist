@@ -40,6 +40,18 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { fetchStoryContent, updateReadingProgress } from '@/services/storyService';
 import { fetchUserProfile, updateUserCoins, isChapterUnlocked, unlockChapter as unlockChapterService } from '@/services/userService';
 import { isAuthenticated } from '@/services/firebaseAuth';
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getCurrentUser } from '@/services/firebaseAuth';
+import { db } from '@/services/firebaseConfig';
+
+// Define interfaces for our data structures
+interface UserChoice {
+  choice: string;
+  response: string;
+  chapterIndex: number;
+  segmentIndex: number;
+  timestamp?: number;
+}
 
 // Define user profile interface
 interface UserProfile {
@@ -62,6 +74,7 @@ export default function StoryReader() {
   const [isNavigatingToSavedPosition, setIsNavigatingToSavedPosition] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
+  const [decisionHistory, setDecisionHistory] = useState<Record<string, any>>({});
   const scrollViewRef = useRef<ScrollView>(null);
   const [lastScrollAction, setLastScrollAction] = useState<number>(0);
   const [isAtBottom, setIsAtBottom] = useState<boolean>(false);
@@ -97,76 +110,236 @@ export default function StoryReader() {
     }
   }, [story]);
 
-  // Handle navigation to saved chapter position from library
+  // Load the story content and user progress
   useEffect(() => {
-    if (story && initialChapter && !isNavigatingToSavedPosition) {
-      const chapterIndexToNavigate = typeof initialChapter === 'number' 
-        ? initialChapter 
-        : parseInt(typeof initialChapter === 'string' ? initialChapter : Array.isArray(initialChapter) ? initialChapter[0] : '0', 10);
+    if (story && !isLoading) {
+      console.log("STORY LOADED, PREPARING TO HANDLE USER PROGRESS");
+      setCharacterName(story.defaultCharacterName);
       
-      if (!isNaN(chapterIndexToNavigate) && chapterIndexToNavigate >= 0 && chapterIndexToNavigate < story.chapters.length) {
-        setIsNavigatingToSavedPosition(true);
-        setCurrentChapterIndex(chapterIndexToNavigate);
-        
-        // Skip the character name input screen
-        if (isFirstPage) {
-          setIsFirstPage(false);
-          loadChapterContent(chapterIndexToNavigate);
+      // Convert initialChapter to number safely
+      const initChapter = initialChapter 
+        ? (typeof initialChapter === 'string' 
+           ? parseInt(initialChapter, 10) 
+           : Array.isArray(initialChapter) 
+             ? parseInt(initialChapter[0], 10) 
+             : typeof initialChapter === 'number' 
+               ? initialChapter 
+               : 0)
+        : 0;
+      
+      // Load user's progress from library if available
+      const loadUserProgress = async () => {
+        if (isAuthenticated() && story) {
+          try {
+            const userId = getCurrentUser()?.uid;
+            if (userId) {
+              console.log('ATTEMPTING TO LOAD USER PROGRESS:', {
+                userId, 
+                storyId: id,
+                currentDecisionHistoryState: Object.keys(decisionHistory).length
+              });
+              
+              const libraryDocRef = doc(db, 'users', userId, 'userLibrary', id as string);
+              const libraryDoc = await getDoc(libraryDocRef);
+              
+              if (libraryDoc.exists()) {
+                const data = libraryDoc.data();
+                
+                // DIAGNOSTICS: Log raw Firestore data
+                console.log('RAW FIRESTORE LIBRARY DATA:', JSON.stringify(data, null, 2));
+                
+                // Extract user choices from the Firestore data format
+                const userChoices = data.userChoices || [];
+                
+                // Convert array of choices to the format our app expects (key-value pairs)
+                const formattedHistory: Record<string, any> = {};
+                
+                userChoices.forEach((choice: UserChoice) => {
+                  // Create keys in the format "chapterIndex-segmentIndex"
+                  const key = `${choice.chapterIndex}-${choice.segmentIndex}`;
+                  formattedHistory[key] = {
+                    choice: choice.choice,
+                    response: choice.response,
+                    chapterIndex: choice.chapterIndex,
+                    segmentIndex: choice.segmentIndex,
+                    timestamp: choice.timestamp || new Date().getTime()
+                  };
+                });
+                
+                console.log('CONVERTED USER CHOICES TO FORMATTED HISTORY:', formattedHistory);
+                
+                // Set the formatted decision history
+                setDecisionHistory(formattedHistory);
+                
+                // Check if we need to load previous chapters
+                if (initChapter > 0) {
+                  // Load all chapters up to and including the current one
+                  for (let i = 0; i <= initChapter; i++) {
+                    // Check if chapter should be loaded
+                    if (!loadedChapters.includes(i) && i < story.chapters.length) {
+                      console.log(`LOADING CHAPTER ${i} FROM LIBRARY PROGRESS`);
+                      loadChapterContent(i);
+                    }
+                  }
+                  
+                  // Set flag to scroll to saved position once chapters are loaded
+                  setIsNavigatingToSavedPosition(true);
+                } else {
+                  // Just load the first chapter
+                  console.log('LOADING FIRST CHAPTER FROM LIBRARY PROGRESS');
+                  loadChapterContent(0);
+                }
+              } else {
+                // No progress, start from the beginning
+                console.log('NO LIBRARY PROGRESS FOUND, STARTING FROM BEGINNING');
+                setDecisionHistory({}); // Initialize empty decision history
+                loadChapterContent(0);
+              }
+            }
+          } catch (error) {
+            console.error('Failed to load user progress:', error);
+            // Fallback to loading first chapter
+            setDecisionHistory({}); // Initialize empty decision history
+            loadChapterContent(0);
+          }
+        } else {
+          // User not authenticated, just load the specified chapter
+          console.log('USER NOT AUTHENTICATED, LOADING WITHOUT PROGRESS');
+          setDecisionHistory({}); // Initialize empty decision history
+          if (initChapter > 0 && initChapter < story.chapters.length) {
+            loadChapterContent(initChapter);
+          } else {
+            loadChapterContent(0);
+          }
         }
+      };
+      
+      if (!isFirstPage) {
+        // Load user progress if not on the first (name input) page
+        loadUserProgress();
+      } else {
+        // Initialize empty decision history on first page
+        setDecisionHistory({});
       }
     }
-  }, [story, initialChapter, isNavigatingToSavedPosition]);
+  }, [story, isLoading, isFirstPage, id, initialChapter]);
 
-  // Load user's unlocked chapters from their progress
+  // Scroll to the appropriate position when navigating from library
   useEffect(() => {
-    const loadUnlockedChapters = async () => {
-      if (story && isAuthenticated()) {
-        // We consider all chapters <= 4 (first 5 chapters) as free
-        const freeChapters = Array.from({ length: 5 }, (_, i) => i);
+    if (isNavigatingToSavedPosition && scrollViewRef.current && storySegments.length > 0) {
+      // Safely convert initialChapter to number
+      const targetChapter = typeof initialChapter === 'string' 
+        ? parseInt(initialChapter, 10) 
+        : Array.isArray(initialChapter)
+          ? parseInt(initialChapter[0], 10)
+          : typeof initialChapter === 'number'
+            ? initialChapter
+            : 0;
+      
+      // Find the first segment of the target chapter
+      const chapterStartIndex = storySegments.findIndex(seg => 
+        seg.chapterIndex === targetChapter
+      );
+      
+      if (chapterStartIndex >= 0) {
+        // Create a function to scroll to the chapter
+        const scrollToChapter = () => {
+          // Get layout measurements for the chapter segment
+          const segmentToScrollTo = chapterStartIndex;
+          
+          // Use requestAnimationFrame to ensure the scrollView has rendered
+          requestAnimationFrame(() => {
+            // Scroll to the start of the chapter with animation
+            scrollViewRef.current?.scrollTo({
+              y: segmentToScrollTo * 150, // Approximate height per segment
+              animated: true
+            });
+          });
+        };
         
-        // For chapters > 4, check if they've been previously unlocked
-        if (story.chapters.length > 5) {
-          const storyId = id as string;
+        // Apply previous decisions to segments if they haven't been applied already
+        // Double-check that all segments with history entries have the correct selectedChoice
+        if (Object.keys(decisionHistory).length > 0) {
+          const updatedSegments = [...storySegments];
+          let hasChanges = false;
           
-          // Initialize with free chapters
-          let allUnlockedChapters = [...freeChapters];
-          
-          // Check each non-free chapter if it's already unlocked
-          for (let i = 5; i < story.chapters.length; i++) {
-            const isUnlocked = await isChapterUnlocked(storyId, i);
-            if (isUnlocked) {
-              allUnlockedChapters.push(i);
+          // Apply decisions from history to any segments that might have been missed
+          for (let i = 0; i < updatedSegments.length; i++) {
+            const segment = updatedSegments[i];
+            if (segment.type === 'decisionPoint') {
+              const decisionKey = `${segment.chapterIndex}-${segment.index}`;
+              const historyEntry = decisionHistory[decisionKey];
+              
+              if (historyEntry && !segment.selectedChoice) {
+                // Apply the saved decision to this segment
+                const updatedSegment = {
+                  ...segment,
+                  selectedChoice: historyEntry.choice,
+                };
+                
+                // If a response is stored in history, prioritize that
+                if (historyEntry.response) {
+                  // Keep the original responses object but ensure the chosen response is there
+                  if (!updatedSegment.responses) {
+                    updatedSegment.responses = {};
+                  }
+                  updatedSegment.responses[historyEntry.choice] = historyEntry.response;
+                } 
+                // Otherwise make sure we at least have a default response
+                else if (!updatedSegment.responses || !updatedSegment.responses[historyEntry.choice]) {
+                  if (!updatedSegment.responses) {
+                    updatedSegment.responses = {};
+                  }
+                  updatedSegment.responses[historyEntry.choice] = `You chose: ${historyEntry.choice}`;
+                }
+                
+                updatedSegments[i] = updatedSegment;
+                hasChanges = true;
+              }
             }
           }
           
-          setUnlockedChapters(allUnlockedChapters);
-        } else {
-          // If there are 5 or fewer chapters, all are free
-          setUnlockedChapters(freeChapters);
+          // Only update segments if we made changes
+          if (hasChanges) {
+            setStorySegments(updatedSegments);
+          }
         }
+        
+        // Perform the scroll after a short delay to ensure rendering is complete
+        setTimeout(scrollToChapter, 500);
+        
+        // Reset the flag to avoid repeated scrolling
+        setIsNavigatingToSavedPosition(false);
       }
-    };
-    
-    loadUnlockedChapters();
-  }, [story, id]);
+    }
+  }, [isNavigatingToSavedPosition, initialChapter, storySegments, decisionHistory]);
 
   // Update reading progress when chapter changes
   useEffect(() => {
     if (isAuthenticated() && story && currentChapter && !isFirstPage) {
+      // DIAGNOSTICS: Log the current decision history before saving
+      console.log('SAVING PROGRESS TO FIRESTORE:', {
+        storyId: story.id,
+        currentChapterIndex,
+        decisionHistoryKeyCount: Object.keys(decisionHistory).length,
+        decisionHistorySample: Object.entries(decisionHistory).slice(0, 2).map(([key, val]) => ({key, val}))
+      });
+      
       // Update reading progress via Cloud Function to ensure secure database operations
       // This approach ensures server-side security rules are enforced
-      updateReadingProgress(story.id, currentChapterIndex)
+      updateReadingProgress(story.id, currentChapterIndex, decisionHistory)
+        .then(() => console.log('Successfully updated reading progress'))
         .catch(error => console.error('Failed to update reading progress:', error));
       
       // Mark this chapter as unlocked
       setUnlockedChapters(prev => {
-        if (!prev.includes(currentChapterIndex)) {
-          return [...prev, currentChapterIndex];
+        if (prev.includes(currentChapterIndex)) {
+          return prev;
         }
-        return prev;
+        return [...prev, currentChapterIndex];
       });
     }
-  }, [currentChapterIndex, story, isFirstPage]);
+  }, [story, currentChapterIndex, decisionHistory, isFirstPage]);
 
   // Configure the navigation header
   useEffect(() => {
@@ -182,27 +355,105 @@ export default function StoryReader() {
     
     // If we've already loaded this chapter, don't duplicate it
     if (loadedChapters.includes(chapterIndex)) {
+      console.log(`CHAPTER ${chapterIndex} ALREADY LOADED, SKIPPING`);
       return;
     }
     
     const chapter = story.chapters[chapterIndex];
     let newSegments = [];
     
+    // Check if this is a previously read chapter from library
+    const chapterHistoryKeys = Object.keys(decisionHistory).filter(
+      key => key.startsWith(`${chapterIndex}-`)
+    );
+    
+    const isPreviouslyReadChapter = chapterHistoryKeys.length > 0;
+    
+    // DIAGNOSTICS: Log chapter loading info
+    console.log('LOADING CHAPTER:', {
+      chapterIndex,
+      title: chapter.title,
+      segmentCount: chapter.segments.length,
+      isPreviouslyReadChapter,
+      decisionHistoryKeyCount: Object.keys(decisionHistory).length,
+      chapterHistoryKeys
+    });
+    
     // Always add the chapter title as the first item for this chapter
     let stopAtDecisionPoint = false;
     
     // Process the segments of the chapter
     for (let i = 0; i < chapter.segments.length; i++) {
-      // Add this segment
-      newSegments.push({
+      // Add this segment with any needed additional properties
+      const segment: any = {
         ...chapter.segments[i],
         index: i,
         chapterIndex: chapterIndex,
         chapterTitle: chapter.title
-      });
+      };
       
-      // Stop loading content after the first decision point
-      if (chapter.segments[i].type === 'decisionPoint') {
+      // Check if this segment has a previous decision in history
+      if (segment.type === 'decisionPoint') {
+        const decisionKey = `${chapterIndex}-${i}`;
+        const historyEntry = decisionHistory[decisionKey];
+        
+        // DIAGNOSTICS: Log decision point processing
+        console.log('PROCESSING DECISION POINT:', {
+          decisionKey,
+          hasHistoryEntry: !!historyEntry,
+          historyChoice: historyEntry?.choice,
+          historyResponse: historyEntry?.response,
+          segmentContent: segment.content?.substring(0, 30) + '...',
+          choicesCount: segment.choices?.length
+        });
+        
+        if (historyEntry && historyEntry.choice) {
+          // Apply the saved decision to this segment
+          segment.selectedChoice = historyEntry.choice;
+          
+          // If a response is stored in history, prioritize that
+          if (historyEntry.response) {
+            // Keep the original responses object but ensure the chosen response is there
+            if (!segment.responses) {
+              segment.responses = {};
+            }
+            segment.responses[historyEntry.choice] = historyEntry.response;
+            
+            // DIAGNOSTICS: Log that we're using a response from history
+            console.log(`USING RESPONSE FROM HISTORY FOR ${decisionKey}:`, historyEntry.response);
+          } 
+          // Otherwise make sure we at least have a default response
+          else if (!segment.responses || !segment.responses[historyEntry.choice]) {
+            if (!segment.responses) {
+              segment.responses = {};
+            }
+            segment.responses[historyEntry.choice] = `You chose: ${historyEntry.choice}`;
+            
+            // DIAGNOSTICS: Log that we're using a default response
+            console.log(`USING DEFAULT RESPONSE FOR ${decisionKey}:`, `You chose: ${historyEntry.choice}`);
+          }
+          
+          // DIAGNOSTICS: Log after applying history
+          console.log('APPLIED HISTORY TO SEGMENT:', {
+            decisionKey,
+            selectedChoice: segment.selectedChoice,
+            hasResponses: !!segment.responses,
+            responseKeys: segment.responses ? Object.keys(segment.responses) : []
+          });
+        } else {
+          // DIAGNOSTICS: Log no history for this decision
+          console.log(`NO HISTORY FOUND FOR DECISION ${decisionKey}`);
+        }
+      }
+      
+      newSegments.push(segment);
+      
+      // Stop loading content after the first unanswered decision point
+      // but only if we're not loading a previously read chapter from library
+      if (!isPreviouslyReadChapter && 
+          segment.type === 'decisionPoint' && 
+          !segment.selectedChoice) {
+        console.log(`STOPPING CHAPTER LOAD AT FIRST UNANSWERED DECISION: ${chapterIndex}-${i}`);
         stopAtDecisionPoint = true;
         break;
       }
@@ -433,8 +684,11 @@ export default function StoryReader() {
         return {
           ...s,
           selectedChoice: choice,
-          response: response,
-          showResponse: true,
+          // Ensure we keep the responses object to render the selected response
+          responses: {
+            ...s.responses,
+            [choice]: response
+          }
         };
       }
       return s;
@@ -442,6 +696,78 @@ export default function StoryReader() {
     
     // Set the updated segments with the selected choice
     setStorySegments(updatedSegments);
+    
+    // Add this decision to the history - now including the response text
+    const decisionKey = `${segment.chapterIndex}-${segment.index}`;
+    const updatedHistory = {
+      ...decisionHistory,
+      [decisionKey]: {
+        choice,
+        response: response,
+        chapterIndex: segment.chapterIndex,
+        segmentIndex: segment.index,
+        timestamp: new Date().getTime()
+      }
+    };
+    
+    // Update the decision history state
+    setDecisionHistory(updatedHistory);
+    
+    // Create the new user choice to add to Firestore
+    const newChoice = {
+      choice,
+      response,
+      chapterIndex: segment.chapterIndex,
+      segmentIndex: segment.index,
+      timestamp: new Date().getTime()
+    };
+    
+    // IMMEDIATELY save this decision to Firestore
+    // This ensures it's saved even if the user doesn't change chapters
+    if (isAuthenticated() && story) {
+      console.log('SAVING CHOICE TO FIRESTORE:', newChoice);
+      
+      // Get existing user choices from Firestore
+      const userId = getCurrentUser()?.uid;
+      if (userId) {
+        const libraryDocRef = doc(db, 'users', userId, 'userLibrary', story.id);
+        getDoc(libraryDocRef).then(docSnap => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            let userChoices = data.userChoices || [];
+            
+            // Remove any existing choice for this same decision point
+            userChoices = userChoices.filter((c: UserChoice) => 
+              !(c.chapterIndex === segment.chapterIndex && c.segmentIndex === segment.index)
+            );
+            
+            // Add the new choice
+            userChoices.push(newChoice);
+            
+            // Update the Firestore document
+            updateDoc(libraryDocRef, {
+              userChoices,
+              currentChapter: segment.chapterIndex,
+              lastReadTimestamp: serverTimestamp()
+            })
+            .then(() => console.log('Successfully saved user choice to Firestore'))
+            .catch(error => console.error('Failed to save user choice to Firestore:', error));
+          } else {
+            // Document doesn't exist, create it
+            setDoc(libraryDocRef, {
+              storyId: story.id,
+              userChoices: [newChoice],
+              currentChapter: segment.chapterIndex,
+              lastReadTimestamp: serverTimestamp()
+            })
+            .then(() => console.log('Successfully created user library entry with choice'))
+            .catch(error => console.error('Failed to create user library entry:', error));
+          }
+        }).catch(error => {
+          console.error('Error getting library document:', error);
+        });
+      }
+    }
     
     // Animate the response appearing
     Animated.timing(responseFadeAnim, {
@@ -604,6 +930,21 @@ export default function StoryReader() {
 
   // Modified to group segments by chapter and display chapter headers
   const renderSegment = (segment: any) => {
+    // DIAGNOSTICS: Log segment type and decision history for decision points
+    if (segment.type === 'decisionPoint') {
+      const decisionKey = `${segment.chapterIndex}-${segment.index}`;
+      const historyEntry = decisionHistory[decisionKey];
+      
+      console.log('RENDER DECISION POINT:', {
+        decisionKey,
+        hasHistory: !!historyEntry,
+        historyChoice: historyEntry?.choice,
+        historyResponse: historyEntry?.response,
+        segmentSelectedChoice: segment.selectedChoice,
+        showingChoices: !(segment.selectedChoice || historyEntry?.choice)
+      });
+    }
+    
     // Render chapter title at the beginning of each chapter's segments
     const isFirstSegmentInChapter = segment.index === 0;
     const chapterTitle = isFirstSegmentInChapter ? (
@@ -615,6 +956,7 @@ export default function StoryReader() {
     ) : null;
 
     if (segment.type === 'text') {
+      // For regular text segments, just render the content
       const processedContent = segment.content?.replace(
         /({characterName}|{YN}|{character})/g, 
         characterName
@@ -634,13 +976,36 @@ export default function StoryReader() {
         </>
       );
     } else if (segment.type === 'decisionPoint') {
-      const hasSelectedChoice = segment.selectedChoice;
+      // For decision points, check if it has already been answered
+      const decisionKey = `${segment.chapterIndex}-${segment.index}`;
+      const historyEntry = decisionHistory[decisionKey];
+      
+      // Check from both local state and decision history
+      const hasSelectedChoice = !!(segment.selectedChoice || historyEntry?.choice);
+      
+      // Get the selected choice from segment or history
+      const selectedChoice = segment.selectedChoice || (historyEntry?.choice);
+      
+      // Get the response text - prioritize history response if available
+      let responseText = '';
+      if (historyEntry?.response) {
+        // Use the stored response text from decision history
+        responseText = historyEntry.response;
+      } else if (hasSelectedChoice && segment.responses && selectedChoice) {
+        // Fall back to response from the segment if available
+        responseText = segment.responses[selectedChoice] || `You chose: ${selectedChoice}`;
+      }
+      
+      // Set opacity to 1 for pre-loaded decisions
+      if (hasSelectedChoice) {
+        responseFadeAnim.setValue(1);
+      }
       
       return (
         <>
           {chapterTitle}
           <View style={styles.decisionContainer}>
-            {/* Display decision content */}
+            {/* Display decision content text */}
             <Text style={{
               fontSize: 18,
               color: colorScheme === 'dark' ? '#fff' : '#000'
@@ -648,7 +1013,7 @@ export default function StoryReader() {
               {segment.content?.replace(/({characterName}|{YN}|{character})/g, characterName)}
             </Text>
             
-            {/* Decision choices */}
+            {/* Only show choices if this decision hasn't been answered yet */}
             {!hasSelectedChoice && (
               <View style={styles.choicesContainer}>
                 {segment.choices?.map((choice: string) => (
@@ -670,50 +1035,16 @@ export default function StoryReader() {
               </View>
             )}
 
-            {/* Response after selection */}
-            {hasSelectedChoice && segment.responses && (
-              <>
-                <View style={styles.choicesContainer}>
-                  <TouchableOpacity
-                    style={[
-                      styles.choiceButton,
-                      {
-                        backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
-                        borderColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9',
-                      },
-                    ]}
-                    disabled={true}
-                  >
-                    <Text
-                      style={[
-                        styles.choiceText,
-                        styles.selectedChoiceText,
-                      ]}
-                    >
-                      {segment.selectedChoice}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                <Animated.View
-                  style={{
-                    opacity: responseFadeAnim,
-                  }}
-                >
-                  <Text style={styles.responseText}>
-                    {segment.responses[segment.selectedChoice]?.replace(
-                      /({characterName}|{YN}|{character})/g,
-                      characterName
-                    )}
-                  </Text>
-                </Animated.View>
-              </>
+            {/* Show response for previously answered decisions */}
+            {hasSelectedChoice && responseText && (
+              <Text style={styles.responseText}>
+                {responseText.replace(/({characterName}|{YN}|{character})/g, characterName)}
+              </Text>
             )}
           </View>
         </>
       );
     }
-
-    return null;
   };
 
   if (isLoading) {

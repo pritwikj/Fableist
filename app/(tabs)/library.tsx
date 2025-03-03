@@ -7,30 +7,48 @@
  * a story, they are navigated to the correct page in the story reader.
  */
 
-import React, { useCallback, useState, useEffect, useRef } from 'react';
-import {
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  TouchableOpacity,
-  useColorScheme,
-  Alert,
+import { 
+  StyleSheet, 
+  TouchableOpacity, 
+  ActivityIndicator, 
+  FlatList, 
+  Alert, 
+  RefreshControl 
 } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
 import { Text, View } from '@/components/Themed';
-import { ActivityIndicator } from 'react-native';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Image } from 'expo-image';
-import { MaterialIcons } from '@expo/vector-icons';
 import Colors from '@/constants/Colors';
-import { fetchUserLibrary } from '@/services/userService';
-import type { LibraryItem } from '@/services/userService';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { useColorScheme } from 'react-native';
+import { fetchUserLibrary, LibraryStory } from '@/services/storyService';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { MaterialIcons } from '@expo/vector-icons';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { Image } from 'expo-image';
+import { useState, useRef, useCallback } from 'react';
 import { db } from '@/services/firebaseConfig';
 import { getCurrentUser } from '@/services/firebaseAuth';
+import { collection, onSnapshot, orderBy, query, doc, getDoc } from 'firebase/firestore';
+
+// Interface for rendered library items
+interface LibraryItem {
+  storyId: string;
+  currentChapter: number | string;
+  lastReadTimestamp: any;
+  docId?: string;
+  story?: {
+    id: string;
+    title: string;
+    author: string;
+    coverImage: string;
+    description: string;
+    defaultCharacterName: string;
+  };
+  unlockedChapters?: number[];
+  chapterHistory?: Record<string, any>;
+}
 
 export default function LibraryScreen() {
   const colorScheme = useColorScheme();
+  const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -42,7 +60,26 @@ export default function LibraryScreen() {
     refetch 
   } = useQuery({
     queryKey: ['user-library'],
-    queryFn: fetchUserLibrary,
+    queryFn: async () => {
+      const library = await fetchUserLibrary();
+      
+      // Convert results to LibraryItem format
+      return library.map(item => ({
+        storyId: item.id || '',
+        currentChapter: typeof item.currentChapter === 'string' 
+          ? parseInt(item.currentChapter, 10) 
+          : item.currentChapter,
+        lastReadTimestamp: item.lastReadTimestamp,
+        story: {
+          id: item.id,
+          title: item.title,
+          author: item.author,
+          coverImage: item.coverImage,
+          description: item.description,
+          defaultCharacterName: item.defaultCharacterName,
+        }
+      }));
+    },
   });
 
   // Set up a Firestore real-time listener when the screen is focused
@@ -98,12 +135,13 @@ export default function LibraryScreen() {
     
     try {
       // Navigate directly to the story reader with the story ID and current chapter
-      // Make sure the currentChapter is passed as a string for the router
       router.push({
         pathname: `/[id]` as const,
         params: { 
           id: item.storyId, 
-          initialChapter: item.currentChapter 
+          initialChapter: typeof item.currentChapter === 'number' 
+            ? item.currentChapter.toString() 
+            : item.currentChapter 
         }
       });
       console.log(`Navigating to story ${item.storyId} at chapter ${item.currentChapter}`);
@@ -185,18 +223,10 @@ export default function LibraryScreen() {
   // Show empty state if there are no items in the library
   if (!libraryItems || libraryItems.length === 0) {
     return (
-      <View style={styles.emptyContainer}>
-        <MaterialIcons name="library-books" size={70} color="#aaaaaa" />
-        <Text style={styles.emptyTitle}>Your Library is Empty</Text>
-        <Text style={styles.emptyText}>
-          Start reading stories to see them appear here
-        </Text>
-        <TouchableOpacity 
-          style={styles.exploreButton} 
-          onPress={() => router.push('/')}
-        >
-          <Text style={styles.exploreButtonText}>Explore Stories</Text>
-        </TouchableOpacity>
+      <View style={styles.emptyLibraryContainer}>
+        <MaterialIcons name="library-books" size={80} color={colorScheme === 'dark' ? '#444' : '#ccc'} />
+        <Text style={styles.emptyLibraryText}>Your library is empty</Text>
+        <Text style={styles.emptyLibrarySubtext}>Start reading stories to see them here</Text>
       </View>
     );
   }
@@ -204,21 +234,29 @@ export default function LibraryScreen() {
   // Render the grid of library items
   return (
     <View style={styles.container}>
-      <FlatList
-        data={libraryItems}
-        renderItem={renderLibraryItem}
-        keyExtractor={(item) => item.id}
-        numColumns={2}
-        contentContainerStyle={styles.gridContainer}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[Colors[colorScheme ?? 'light'].tint]}
-            tintColor={Colors[colorScheme ?? 'light'].tint}
-          />
-        }
-      />
+      {!libraryItems || libraryItems.length === 0 ? (
+        <View style={styles.emptyLibraryContainer}>
+          <MaterialIcons name="library-books" size={80} color={colorScheme === 'dark' ? '#444' : '#ccc'} />
+          <Text style={styles.emptyLibraryText}>Your library is empty</Text>
+          <Text style={styles.emptyLibrarySubtext}>Start reading stories to see them here</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={libraryItems}
+          renderItem={renderLibraryItem}
+          keyExtractor={(item) => item.storyId}
+          numColumns={2}
+          contentContainerStyle={styles.gridContainer}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[Colors[colorScheme ?? 'light'].tint]}
+              tintColor={Colors[colorScheme ?? 'light'].tint}
+            />
+          }
+        />
+      )}
     </View>
   );
 }
@@ -295,33 +333,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  emptyContainer: {
+  emptyLibraryContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
-  emptyTitle: {
+  emptyLibraryText: {
     fontSize: 20,
     fontWeight: 'bold',
     marginTop: 16,
     marginBottom: 8,
   },
-  emptyText: {
+  emptyLibrarySubtext: {
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 24,
     opacity: 0.7,
-  },
-  exploreButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    backgroundColor: '#4a90e2',
-    borderRadius: 8,
-  },
-  exploreButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
   },
 }); 

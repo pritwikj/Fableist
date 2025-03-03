@@ -27,6 +27,8 @@ export interface UserStoryProgress {
   storyId: string;
   currentChapter: number | string; // Can be number or string for backward compatibility
   lastReadTimestamp: Timestamp;
+  unlockedChapters?: number[]; // List of unlocked chapter indices
+  chapterHistory?: Record<string, any>; // History of decisions made in chapters
 }
 
 /**
@@ -229,11 +231,13 @@ export async function fetchUserLibrary(): Promise<LibraryStory[]> {
  * Updates the user's reading progress for a specific story
  * @param storyId ID of the story being read
  * @param currentChapter Current chapter index as a number or string
+ * @param decisions Optional object containing decisions made in chapters
  * @returns Promise resolving to success/failure status
  */
 export async function updateReadingProgress(
   storyId: string, 
-  currentChapter: number | string
+  currentChapter: number | string,
+  decisions?: Record<string, any>
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Validate inputs
@@ -246,7 +250,7 @@ export async function updateReadingProgress(
 
     // Use Cloud Function to securely update reading progress
     // This approach ensures server-side security rules are enforced
-    const result = await updateReadingProgressSecure(storyId, currentChapter);
+    const result = await updateReadingProgressSecure(storyId, currentChapter, decisions);
     
     if (result.success) {
       console.log(`Successfully updated reading progress for story ${storyId}, chapter ${currentChapter} via Cloud Function`);

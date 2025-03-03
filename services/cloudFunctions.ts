@@ -16,11 +16,13 @@ const functions = getFunctions();
  * Updates the user's reading progress securely via Cloud Functions
  * @param storyId ID of the story being read
  * @param currentChapter Current chapter index (number or string)
+ * @param decisions Optional object containing user's decision history
  * @returns Promise resolving to success/failure status
  */
 export async function updateReadingProgressSecure(
   storyId: string,
-  currentChapter: number | string
+  currentChapter: number | string,
+  decisions?: Record<string, any>
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Verify user is authenticated
@@ -36,7 +38,8 @@ export async function updateReadingProgressSecure(
     const updateProgressFunction = httpsCallable(functions, 'updateReadingProgress');
     const result = await updateProgressFunction({
       storyId,
-      currentChapter
+      currentChapter,
+      decisions
     });
 
     // Parse and return the result
