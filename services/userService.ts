@@ -351,4 +351,40 @@ export async function unlockChapter(storyId: string, chapterIndex: number): Prom
     console.error('Error unlocking chapter:', error);
     return false;
   }
+}
+
+/**
+ * Checks if a user has previously started reading a specific story
+ * @param storyId The ID of the story to check
+ * @returns Promise resolving to boolean and optional character name
+ */
+export async function hasStartedReading(storyId: string): Promise<{ hasStarted: boolean; characterName?: string }> {
+  try {
+    const currentUser = getCurrentUser();
+    
+    if (!currentUser) {
+      console.log('User not authenticated, returning not started status');
+      return { hasStarted: false };
+    }
+    
+    const userId = currentUser.uid;
+    const libraryDocRef = doc(db, 'users', userId, 'userLibrary', storyId);
+    const libraryDoc = await getDoc(libraryDocRef);
+    
+    if (libraryDoc.exists()) {
+      const data = libraryDoc.data();
+      const characterName = data.characterName;
+      
+      // Consider a story started if it has a character name set
+      return { 
+        hasStarted: !!characterName, 
+        characterName: characterName
+      };
+    }
+    
+    return { hasStarted: false };
+  } catch (error) {
+    console.error('Error checking if story has been started:', error);
+    return { hasStarted: false };
+  }
 } 

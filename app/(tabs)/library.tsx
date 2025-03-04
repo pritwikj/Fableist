@@ -125,7 +125,7 @@ export default function LibraryScreen() {
     setRefreshing(false);
   }, [refetch]);
 
-  // Navigate to the story reader at the specific chapter
+  // Navigate to the story description page instead of directly to the reader
   const handleStoryPress = (item: LibraryItem) => {
     if (!item.story) {
       // Handle the case where story metadata isn't available
@@ -134,17 +134,12 @@ export default function LibraryScreen() {
     }
     
     try {
-      // Navigate directly to the story reader with the story ID and current chapter
+      // Navigate to the story description page instead of directly to the reader
       router.push({
-        pathname: `/[id]` as const,
-        params: { 
-          id: item.storyId, 
-          initialChapter: typeof item.currentChapter === 'number' 
-            ? item.currentChapter.toString() 
-            : item.currentChapter 
-        }
+        pathname: `/story/[id]` as const,
+        params: { id: item.storyId }
       });
-      console.log(`Navigating to story ${item.storyId} at chapter ${item.currentChapter}`);
+      console.log(`Navigating to story description for ${item.storyId}`);
     } catch (error) {
       console.error('Navigation error:', error);
       Alert.alert(

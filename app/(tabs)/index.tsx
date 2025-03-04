@@ -80,28 +80,12 @@ export default function StoriesScreen() {
   }, [refetchStories, refetchLibrary]);
 
   const handleStoryPress = (item: Story) => {
-    // Check if this story exists in the user's library
-    const libraryItem = userLibrary[item.id];
-    
-    if (libraryItem && libraryItem.currentChapter) {
-      // User has read this story before, navigate with the saved chapter
-      router.push({
-        pathname: `/[id]` as const,
-        params: { 
-          id: item.id, 
-          initialChapter: typeof libraryItem.currentChapter === 'number' 
-            ? libraryItem.currentChapter.toString() 
-            : libraryItem.currentChapter 
-        }
-      });
-      console.log(`Navigating to story ${item.id} at chapter ${libraryItem.currentChapter}`);
-    } else {
-      // New story, navigate to the beginning without specifying a chapter
-      router.push({
-        pathname: `/[id]` as const,
-        params: { id: item.id }
-      });
-    }
+    // Navigate to story description page instead of directly to reader
+    router.push({
+      pathname: `/story/[id]` as const,
+      params: { id: item.id }
+    });
+    console.log(`Navigating to story description for ${item.id}`);
   };
 
   const renderStoryCard = ({ item }: { item: Story }) => {

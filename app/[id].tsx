@@ -106,18 +106,14 @@ export default function StoryReader() {
 
   // Load the story content and user progress
   useEffect(() => {
-    if (story && !isLoading) {
-      console.log("STORY LOADED, PREPARING TO HANDLE USER PROGRESS");
+    if (story) {
+      setCharacterName(story.defaultCharacterName || 'Reader');
       
-      // Convert initialChapter to number safely
-      const initChapter = initialChapter 
+      // Check if initialChapter is provided in URL params
+      const startingChapter = initialChapter
         ? (typeof initialChapter === 'string' 
-           ? parseInt(initialChapter, 10) 
-           : Array.isArray(initialChapter) 
-             ? parseInt(initialChapter[0], 10) 
-             : typeof initialChapter === 'number' 
-               ? initialChapter 
-               : 0)
+          ? parseInt(initialChapter, 10) 
+          : initialChapter)
         : 0;
       
       // Load user's progress from library if available
@@ -218,68 +214,44 @@ export default function StoryReader() {
                     // We do this with a small delay between chapters to ensure they load in order
                     for (let i = 0; i <= startChapter && i < story.chapters.length; i++) {
                       // Use setTimeout with increasing delays to ensure chapters load in order
-                      // This helps avoid race conditions with state updates
                       setTimeout(() => {
-                        console.log(`LOADING CHAPTER ${i} AS PART OF RESTORE`);
-                        // DIAGNOSTIC: Check decision history right before loading each chapter
-                        console.log(`DEBUG [loading chapter ${i}]: Current decision history:`, 
-                          Object.keys(decisionHistory).length, 'entries');
-                        console.log(`DEBUG [CRITICAL] Chapter ${i} load - Reference check:`, {
-                          reactStateKeys: Object.keys(decisionHistory).length,
-                          localCopyKeys: Object.keys(currentDecisionHistory).length,
-                          directHistoryKeys: Object.keys(formattedHistory).length,
-                          areEqual: JSON.stringify(Object.keys(decisionHistory)) === JSON.stringify(Object.keys(currentDecisionHistory))
-                        });
-                        
-                        // CRITICAL FIX: Use the direct formatted history instead of React state
+                        // Use loadChapterContentWithHistory to load chapter with user's previous choices
+                        // This ensures decisions are preserved when continuing from where the user left off
                         loadChapterContentWithHistory(i, formattedHistory);
                         
-                        // When we reach the last chapter, set the navigation flag to scroll to the right position
+                        // Add this chapter to the list of loaded chapters
+                        setLoadedChapters(prev => [...prev, i]);
+                        
+                        // If this is the last chapter to load, trigger scroll to saved position
                         if (i === startChapter) {
                           setIsNavigatingToSavedPosition(true);
                         }
-                      }, i * 200); // Increased delay between each chapter load for debugging
+                      }, i * 100); // Delay increases with each chapter
                     }
-                  }, 300); // Increased delay to ensure decision history is set first
+                  }, 300); // Initial delay before starting chapter loading
                 } else {
-                  // No saved character name, use default but stay on first page
-                  setCharacterName(story.defaultCharacterName);
+                  // If there's no character name but there is a record, show the character input screen
+                  setIsFirstPage(true);
                 }
               } else {
-                // No library entry exists yet, use default character name
-                setCharacterName(story.defaultCharacterName);
-                // We'll let the handleStartReading function handle loading chapter content when user clicks Start
+                // No library document exists, show the character input screen
+                setIsFirstPage(true);
               }
             }
           } catch (error) {
-            console.error('Failed to load user progress:', error);
-            // Fallback to loading first chapter
-            setDecisionHistory({}); // Initialize empty decision history
-            loadChapterContent(0);
+            console.error('Error loading user progress:', error);
+            // Show character input screen in case of error
+            setIsFirstPage(true);
           }
         } else {
-          // User not authenticated, just load the specified chapter
-          console.log('USER NOT AUTHENTICATED, LOADING WITHOUT PROGRESS');
-          setDecisionHistory({}); // Initialize empty decision history
-          // Set default character name for unauthenticated users
-          setCharacterName(story.defaultCharacterName);
-          if (initChapter > 0 && initChapter < story.chapters.length) {
-            loadChapterContent(initChapter);
-          } else {
-            loadChapterContent(0);
-          }
+          // Not authenticated, show character input screen
+          setIsFirstPage(true);
         }
       };
       
-      // Always load user progress to check for saved character name
       loadUserProgress();
-      
-      // Initialize empty decision history on first page if needed
-      if (isFirstPage) {
-        setDecisionHistory({});
-      }
     }
-  }, [story, isLoading, id, initialChapter]);
+  }, [story, id, initialChapter]);
 
   // Scroll to the appropriate position when navigating from library
   useEffect(() => {

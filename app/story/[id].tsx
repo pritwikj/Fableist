@@ -6,16 +6,16 @@
  * - Story title and author
  * - Cover image 
  * - Description
- * - Start reading button
-
+ * - Read Now button
  * - Themed components for dark/light mode support
  *
- * When the user taps "Start Reading", they are navigated to the story reader screen
- * where they can begin the interactive story experience.
+ * When the user taps "Read Now":
+ * - If first time reading: they are directed to character name input page
+ * - If previously started: they continue from their last position
  */
 
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Image,
@@ -28,18 +28,41 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Text, View } from '@/components/Themed';
 import { useQuery } from '@tanstack/react-query';
 import { MaterialIcons } from '@expo/vector-icons';
-import { fetchStoryMetadata } from "../../services/storyService"
-import type { StoryMetadata } from "../../services/storyService"
+import { fetchStoryMetadata } from "../../services/storyService";
+import type { StoryMetadata } from "../../services/storyService";
+import { hasStartedReading } from "../../services/userService";
+import { isAuthenticated } from "../../services/firebaseAuth";
 
 export default function StoryDetails() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const colorScheme = useColorScheme();
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasStarted, setHasStarted] = useState(false);
 
-  const { data: story, isLoading, error } = useQuery<StoryMetadata>({
+  const { data: story, isLoading: isStoryLoading, error } = useQuery<StoryMetadata>({
     queryKey: ['story-details', id],
     queryFn: () => fetchStoryMetadata(id as string),
   });
+
+  // Check if user has started reading this story before
+  useEffect(() => {
+    const checkReadingStatus = async () => {
+      if (isAuthenticated() && story) {
+        try {
+          const result = await hasStartedReading(id as string);
+          setHasStarted(result.hasStarted);
+        } catch (error) {
+          console.error('Error checking reading status:', error);
+        }
+      }
+      setIsLoading(false);
+    };
+
+    if (!isStoryLoading && story) {
+      checkReadingStatus();
+    }
+  }, [id, isStoryLoading, story]);
 
   // Configure the navigation header
   React.useEffect(() => {
@@ -48,7 +71,7 @@ export default function StoryDetails() {
     });
   }, [story?.title]);
 
-  if (isLoading) {
+  if (isStoryLoading || isLoading) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color={colorScheme === 'dark' ? '#4a9eff' : '#2b7de9'} />
@@ -64,7 +87,10 @@ export default function StoryDetails() {
     );
   }
 
-  const handleStartReading = () => {
+  const handleReadNow = () => {
+    // Navigate to the story reader page
+    // The story reader component will handle showing the character input screen 
+    // or continuing from the last position based on Firebase data
     router.push(`/${story.id}`);
   };
 
@@ -91,13 +117,15 @@ export default function StoryDetails() {
           
           <TouchableOpacity
             style={[
-              styles.startButton,
+              styles.readButton,
               { backgroundColor: colorScheme === 'dark' ? '#4a9eff' : '#2b7de9' }
             ]}
-            onPress={handleStartReading}
+            onPress={handleReadNow}
           >
-            <Text style={styles.startButtonText}>Start Reading</Text>
-            <MaterialIcons name="arrow-forward" size={24} color="white" style={styles.startButtonIcon} />
+            <Text style={styles.readButtonText}>
+              {hasStarted ? 'Continue Reading' : 'Read Now'}
+            </Text>
+            <MaterialIcons name="arrow-forward" size={24} color="white" style={styles.readButtonIcon} />
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -134,7 +162,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     marginBottom: 24,
   },
-  startButton: {
+  readButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -142,13 +170,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginTop: 8,
   },
-  startButtonText: {
+  readButtonText: {
     color: 'white',
     fontSize: 18,
     fontWeight: '600',
     marginRight: 8,
   },
-  startButtonIcon: {
+  readButtonIcon: {
     marginLeft: 4,
   },
   errorText: {
